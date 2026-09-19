@@ -27,7 +27,7 @@ Leading validation signal: an eligible learner completes the core journey withou
 | Undo and advanced controls | Undo/redo includes Arrange; searchable tables; optional advanced metadata panel. No unsupported silent round-trip loss. |
 | Moderation | Initial single owner handles held posts/reports. Model decisions are evidence, not authority to grant privileges or auto-approve corrections. |
 | Names and identity | Generated neutral name; duplicate display names permitted. ULID maps one-to-one to Auth UUID. No implicit account linking by email. |
-| Runtime | React/Vite client, same-origin Worker gateway, Supabase identity/Postgres. Mandatory Python orchestration and native Rust extension require a compatible backend runtime behind the gateway; decide after runtime feasibility review before API implementation. No GPU. |
+| Runtime | React/Vite client, same-origin Worker gateway, Supabase identity/Postgres. Python orchestration and native Rust extension run in a private, idle-sleep Cloudflare Container behind the gateway; see `runtime-decision.md`. Paid deployment awaits owner budget approval. No GPU. |
 
 ## Ordered delivery and gates
 
