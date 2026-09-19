@@ -1,0 +1,29 @@
+[project]
+name = "schemasprint"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "psycopg[binary]>=3.2,<4",
+  "pytest>=8,<10",
+  "ruff>=0.12,<1",
+  "mypy>=1.16,<2",
+  "sqlfluff>=3.4,<4",
+]
+local-postgres = ["pgserver==0.1.4; python_version < '3.13'"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
