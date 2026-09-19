@@ -1,0 +1,1077 @@
+openapi: 3.1.0
+info:
+  title: SchemaSprint BFF API
+  version: 0.1.0
+  description: Versioned same-origin contract for the private Web/PWA MVP. Provider traces and secrets are never returned.
+servers:
+  - url: /api
+security:
+  - sessionCookie: []
+tags:
+  - name: Auth
+  - name: Account
+  - name: Problems
+  - name: Workspace
+  - name: Assessment
+  - name: Community
+  - name: Notices
+  - name: Admin
+paths:
+  /v1/auth/{provider}/start:
+    get:
+      tags: [Auth]
+      security: []
+      operationId: startOAuth
+      parameters:
+        - $ref: '#/components/parameters/OAuthProvider'
+        - name: returnTo
+          in: query
+          schema: {type: string, maxLength: 500, default: /}
+      responses:
+        '302':
+          description: Redirect to the provider with server-created state and PKCE.
+          headers:
+            Location: {schema: {type: string, format: uri}}
+            Set-Cookie: {schema: {type: string}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/auth/{provider}/callback:
+    get:
+      tags: [Auth]
+      security: []
+      operationId: finishOAuth
+      parameters:
+        - $ref: '#/components/parameters/OAuthProvider'
+        - {name: code, in: query, required: true, schema: {type: string, minLength: 1, maxLength: 4096}}
+        - {name: state, in: query, required: true, schema: {type: string, minLength: 32, maxLength: 512}}
+      responses:
+        '302':
+          description: Bind an allowlisted verified provider subject and establish a session.
+          headers:
+            Location: {schema: {type: string}}
+            Set-Cookie: {schema: {type: string}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/session:
+    get:
+      tags: [Auth]
+      security: []
+      operationId: getSession
+      responses:
+        '200':
+          description: Current session and gating state; unauthenticated is represented, not a 500.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SessionState'}
+  /v1/session/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      parameters: [{$ref: '#/components/parameters/CsrfToken'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '204': {description: Server session revoked and cookie cleared.}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/onboarding:
+    post:
+      tags: [Account]
+      operationId: completeOnboarding
+      parameters: [{$ref: '#/components/parameters/CsrfToken'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [isAtLeast16, policyVersionIds]
+              properties:
+                isAtLeast16: {type: boolean, const: true}
+                displayName: {type: string, minLength: 1, maxLength: 64}
+                policyVersionIds:
+                  type: array
+                  minItems: 1
+                  maxItems: 10
+                  uniqueItems: true
+                  items: {$ref: '#/components/schemas/Ulid'}
+      responses:
+        '200': {description: Gate completed., content: {application/json: {schema: {$ref: '#/components/schemas/Profile'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/policies:
+    get:
+      tags: [Account]
+      operationId: listRequiredPolicies
+      responses:
+        '200':
+          description: Latest effective policies per kind, readable before acknowledgement.
+          content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Policy'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/profile:
+    get:
+      tags: [Account]
+      operationId: getProfile
+      responses:
+        '200': {description: Profile., content: {application/json: {schema: {$ref: '#/components/schemas/Profile'}}}}
+        default: {$ref: '#/components/responses/Error'}
+    patch:
+      tags: [Account]
+      operationId: updateProfile
+      parameters: [{$ref: '#/components/parameters/CsrfToken'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                displayName: {type: string, minLength: 1, maxLength: 64}
+                locale: {$ref: '#/components/schemas/Locale'}
+                theme: {type: string, enum: [system, light, dark]}
+      responses:
+        '200': {description: Updated profile., content: {application/json: {schema: {$ref: '#/components/schemas/Profile'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/account/export:
+    post:
+      tags: [Account]
+      operationId: requestAccountExport
+      parameters: [{$ref: '#/components/parameters/CsrfToken'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '202': {description: Export job accepted., content: {application/json: {schema: {$ref: '#/components/schemas/Job'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/account:
+    delete:
+      tags: [Account]
+      operationId: deleteAccount
+      description: Re-authentication proof is server-created and short lived. Completion is not claimed until live deletion and Auth removal succeed.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - {name: X-Reauthentication-Proof, in: header, required: true, schema: {type: string, minLength: 32, maxLength: 512}}
+      responses:
+        '204': {description: Live account content deleted and sessions revoked.}
+        '202': {description: External Auth deletion is retrying; access remains revoked., content: {application/json: {schema: {$ref: '#/components/schemas/Job'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/problems/today:
+    get:
+      tags: [Problems]
+      operationId: getTodayProblem
+      parameters: [{$ref: '#/components/parameters/Locale'}]
+      responses:
+        '200': {description: Globally published problem for current JST practice date., content: {application/json: {schema: {$ref: '#/components/schemas/ProblemDetail'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/problems:
+    get:
+      tags: [Problems]
+      operationId: listProblems
+      parameters:
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {name: q, in: query, schema: {type: string, maxLength: 200}}
+        - {name: difficulty, in: query, schema: {$ref: '#/components/schemas/Difficulty'}}
+        - {name: genre, in: query, schema: {type: string, maxLength: 64}}
+        - {name: inputFormat, in: query, schema: {$ref: '#/components/schemas/InputFormat'}}
+        - {name: status, in: query, schema: {type: string, enum: [passed, not_passed, unsubmitted]}}
+        - {name: publishedFrom, in: query, schema: {type: string, format: date}}
+        - {name: publishedTo, in: query, schema: {type: string, format: date}}
+        - {$ref: '#/components/parameters/Locale'}
+      responses:
+        '200': {description: Published library., content: {application/json: {schema: {$ref: '#/components/schemas/ProblemPage'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/problems/{problemId}:
+    get:
+      tags: [Problems]
+      operationId: getProblem
+      parameters:
+        - {$ref: '#/components/parameters/ProblemId'}
+        - {$ref: '#/components/parameters/Locale'}
+        - {name: version, in: query, schema: {type: integer, minimum: 1}}
+      responses:
+        '200': {description: "Published statement, official answer and explanation; opening is penalty-free.", content: {application/json: {schema: {$ref: '#/components/schemas/ProblemDetail'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/problems/{problemId}/draft:
+    get:
+      tags: [Workspace]
+      operationId: getServerDraft
+      parameters: [{$ref: '#/components/parameters/ProblemId'}]
+      responses:
+        '200': {description: Premium synchronized draft., content: {application/json: {schema: {$ref: '#/components/schemas/Draft'}}}}
+        default: {$ref: '#/components/responses/Error'}
+    put:
+      tags: [Workspace]
+      operationId: putServerDraft
+      parameters:
+        - {$ref: '#/components/parameters/ProblemId'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+        - {name: If-Match, in: header, required: true, schema: {type: string, pattern: '^"[1-9][0-9]*"$'}}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/DraftWrite'}}}}
+      responses:
+        '200': {description: Saved with incremented revision., content: {application/json: {schema: {$ref: '#/components/schemas/Draft'}}}}
+        '409': {$ref: '#/components/responses/Conflict'}
+        default: {$ref: '#/components/responses/Error'}
+    delete:
+      tags: [Workspace]
+      operationId: deleteServerDraft
+      parameters: [{$ref: '#/components/parameters/ProblemId'}, {$ref: '#/components/parameters/CsrfToken'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '204': {description: Server draft deleted.}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/submissions:
+    post:
+      tags: [Assessment]
+      operationId: createSubmission
+      parameters: [{$ref: '#/components/parameters/CsrfToken'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SubmissionCreate'}}}}
+      responses:
+        '202': {description: Immutable snapshot accepted; semantic assessment queued., content: {application/json: {schema: {$ref: '#/components/schemas/Submission'}}}}
+        '200': {description: Idempotent replay returns the original resource., content: {application/json: {schema: {$ref: '#/components/schemas/Submission'}}}}
+        '409': {$ref: '#/components/responses/Conflict'}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/submissions/{submissionId}:
+    get:
+      tags: [Assessment]
+      operationId: getSubmission
+      parameters: [{$ref: '#/components/parameters/SubmissionId'}]
+      responses:
+        '200': {description: Owned immutable submission and current assessment state., content: {application/json: {schema: {$ref: '#/components/schemas/Submission'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/submissions/{submissionId}/feedback:
+    get:
+      tags: [Assessment]
+      operationId: listFeedback
+      parameters: [{$ref: '#/components/parameters/SubmissionId'}, {$ref: '#/components/parameters/Locale'}]
+      responses:
+        '200': {description: Existing feedback; rereads consume nothing., content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Feedback'}}}}}
+        default: {$ref: '#/components/responses/Error'}
+    post:
+      tags: [Assessment]
+      operationId: requestFeedback
+      parameters: [{$ref: '#/components/parameters/SubmissionId'}, {$ref: '#/components/parameters/CsrfToken'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                rewardAttemptId: {$ref: '#/components/schemas/Ulid'}
+      responses:
+        '202': {description: Generation accepted., content: {application/json: {schema: {$ref: '#/components/schemas/Job'}}}}
+        '402': {description: A verified reward is required; production ads are disabled in MVP., content: {application/json: {schema: {$ref: '#/components/schemas/ProblemError'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/feedback-rewards:
+    post:
+      tags: [Assessment]
+      operationId: startFeedbackReward
+      parameters: [{$ref: '#/components/parameters/CsrfToken'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '503': {description: Honest no-inventory/disabled response in production MVP., content: {application/json: {schema: {$ref: '#/components/schemas/ProblemError'}}}}
+        '201': {description: Sandbox-only reward attempt., content: {application/json: {schema: {$ref: '#/components/schemas/RewardAttempt'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/translations/{contentKind}/{contentId}:
+    get:
+      tags: [Problems]
+      operationId: getTranslation
+      description: Lazy NMT read keyed by immutable source content version; private feedback remains owner-isolated.
+      parameters:
+        - {name: contentKind, in: path, required: true, schema: {type: string, enum: [problem_statement, problem_explanation, feedback, community_post, notice]}}
+        - {name: contentId, in: path, required: true, schema: {$ref: '#/components/schemas/Ulid'}}
+        - {name: contentVersion, in: query, required: true, schema: {type: integer, minimum: 1}}
+        - {$ref: '#/components/parameters/Locale'}
+      responses:
+        '200': {description: Source or cached translated content., content: {application/json: {schema: {$ref: '#/components/schemas/TranslatedContent'}}}}
+        '202': {description: Translation queued; English source returned for safe fallback., content: {application/json: {schema: {$ref: '#/components/schemas/TranslatedContent'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/dashboard:
+    get:
+      tags: [Assessment]
+      operationId: getDashboard
+      parameters:
+        - {name: from, in: query, schema: {type: string, format: date}}
+        - {name: to, in: query, schema: {type: string, format: date}}
+      responses:
+        '200': {description: Unique pass totals/calendar only; no accuracy metric., content: {application/json: {schema: {$ref: '#/components/schemas/Dashboard'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/problems/{problemId}/posts:
+    get:
+      tags: [Community]
+      operationId: listCommunityPosts
+      parameters: [{$ref: '#/components/parameters/ProblemId'}, {$ref: '#/components/parameters/Cursor'}, {$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Locale'}]
+      responses:
+        '200': {description: Official answer precedes exact-full member posts., content: {application/json: {schema: {$ref: '#/components/schemas/PostPage'}}}}
+        default: {$ref: '#/components/responses/Error'}
+    post:
+      tags: [Community]
+      operationId: createCommunityPost
+      parameters: [{$ref: '#/components/parameters/ProblemId'}, {$ref: '#/components/parameters/CsrfToken'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [submissionId, explanation]
+              properties:
+                submissionId: {$ref: '#/components/schemas/Ulid'}
+                explanation: {type: string, minLength: 1, maxLength: 10000}
+      responses:
+        '202': {description: Exact-full post accepted for premoderation., content: {application/json: {schema: {$ref: '#/components/schemas/CommunityPost'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/reports:
+    get:
+      tags: [Community]
+      operationId: listOwnReports
+      parameters: [{$ref: '#/components/parameters/Cursor'}, {$ref: '#/components/parameters/Limit'}]
+      responses:
+        '200': {description: User reports., content: {application/json: {schema: {$ref: '#/components/schemas/ReportPage'}}}}
+        default: {$ref: '#/components/responses/Error'}
+    post:
+      tags: [Community]
+      operationId: createReport
+      parameters: [{$ref: '#/components/parameters/CsrfToken'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ReportCreate'}}}}
+      responses:
+        '201': {description: Report stored; target remains published pending review., content: {application/json: {schema: {$ref: '#/components/schemas/Report'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/notices:
+    get:
+      tags: [Notices]
+      operationId: listNotices
+      parameters: [{$ref: '#/components/parameters/Cursor'}, {$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Locale'}]
+      responses:
+        '200': {description: Approved archive and unread state., content: {application/json: {schema: {$ref: '#/components/schemas/NoticePage'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/notices/{noticeVersionId}/read:
+    put:
+      tags: [Notices]
+      operationId: markNoticeRead
+      parameters:
+        - {name: noticeVersionId, in: path, required: true, schema: {$ref: '#/components/schemas/Ulid'}}
+        - {$ref: '#/components/parameters/CsrfToken'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      responses:
+        '204': {description: Read marker recorded idempotently.}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/jobs/{jobId}:
+    get:
+      tags: [Account]
+      operationId: getJob
+      parameters:
+        - {name: jobId, in: path, required: true, schema: {$ref: '#/components/schemas/Ulid'}}
+      responses:
+        '200': {description: Owned or authorized job state., content: {application/json: {schema: {$ref: '#/components/schemas/Job'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/admin/problems/{problemId}/versions:
+    post:
+      tags: [Admin]
+      operationId: createProblemVersion
+      description: Create a new draft correction/version; never overwrites historical content.
+      parameters:
+        - {$ref: '#/components/parameters/ProblemId'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+        - {$ref: '#/components/parameters/ReauthenticationProof'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProblemVersionWrite'}
+      responses:
+        '201': {description: Draft version created., content: {application/json: {schema: {$ref: '#/components/schemas/AdminProblemVersion'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/admin/problem-versions/{problemVersionId}:
+    get:
+      tags: [Admin]
+      operationId: getAdminProblemVersion
+      parameters:
+        - {$ref: '#/components/parameters/ProblemVersionId'}
+      responses:
+        '200': {description: Draft or frozen version for content administration., content: {application/json: {schema: {$ref: '#/components/schemas/AdminProblemVersion'}}}}
+        default: {$ref: '#/components/responses/Error'}
+    put:
+      tags: [Admin]
+      operationId: replaceDraftProblemVersion
+      parameters:
+        - {$ref: '#/components/parameters/ProblemVersionId'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+        - {$ref: '#/components/parameters/ReauthenticationProof'}
+        - {name: If-Match, in: header, required: true, schema: {type: string, pattern: '^"[0-9a-f]{64}"$'}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProblemVersionWrite'}
+      responses:
+        '200': {description: Unfrozen draft replaced., content: {application/json: {schema: {$ref: '#/components/schemas/AdminProblemVersion'}}}}
+        '409': {$ref: '#/components/responses/Conflict'}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/admin/problem-versions/{problemVersionId}/validate:
+    post:
+      tags: [Admin]
+      operationId: validateProblemVersion
+      parameters:
+        - {$ref: '#/components/parameters/ProblemVersionId'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+        - {$ref: '#/components/parameters/ReauthenticationProof'}
+      responses:
+        '202': {description: Static and Jev quality validation queued., content: {application/json: {schema: {$ref: '#/components/schemas/Job'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/admin/problem-versions/{problemVersionId}/publish:
+    post:
+      tags: [Admin]
+      operationId: publishProblemVersion
+      description: Requires matching correction approval when this replaces published content; invalidates translation caches by version.
+      parameters:
+        - {$ref: '#/components/parameters/ProblemVersionId'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+        - {$ref: '#/components/parameters/ReauthenticationProof'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [publicationDate, approvedTargetDigest]
+              properties:
+                publicationDate: {type: string, format: date}
+                approvedTargetDigest: {type: string, pattern: '^[0-9a-f]{64}$'}
+      responses:
+        '200': {description: Idempotently published or corrected future/current version., content: {application/json: {schema: {$ref: '#/components/schemas/AdminProblemVersion'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/admin/posts:
+    get:
+      tags: [Admin]
+      operationId: listHeldPosts
+      parameters:
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {name: state, in: query, schema: {type: string, enum: [held, approved, rejected], default: held}}
+      responses:
+        '200': {description: Moderation queue., content: {application/json: {schema: {$ref: '#/components/schemas/CommunityPostPage'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/admin/posts/{postId}/decision:
+    post:
+      tags: [Admin]
+      operationId: decidePost
+      parameters:
+        - {name: postId, in: path, required: true, schema: {$ref: '#/components/schemas/Ulid'}}
+        - {$ref: '#/components/parameters/CsrfToken'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+        - {$ref: '#/components/parameters/ReauthenticationProof'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [decision, reason]
+              properties:
+                decision: {type: string, enum: [approved, rejected]}
+                reason: {type: string, minLength: 1, maxLength: 2000}
+      responses:
+        '200': {description: Audited moderation decision., content: {application/json: {schema: {$ref: '#/components/schemas/CommunityPost'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/admin/notices:
+    post:
+      tags: [Admin]
+      operationId: createNoticeDraft
+      parameters: [{$ref: '#/components/parameters/CsrfToken'}, {$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/ReauthenticationProof'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/NoticeWrite'}
+      responses:
+        '201': {description: Notice draft created; not visible to learners., content: {application/json: {schema: {$ref: '#/components/schemas/AdminNotice'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/admin/notices/{noticeId}/versions:
+    post:
+      tags: [Admin]
+      operationId: createNoticeVersion
+      parameters:
+        - {name: noticeId, in: path, required: true, schema: {$ref: '#/components/schemas/Ulid'}}
+        - {$ref: '#/components/parameters/CsrfToken'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+        - {$ref: '#/components/parameters/ReauthenticationProof'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/NoticeWrite'}
+      responses:
+        '201': {description: New notice draft version created., content: {application/json: {schema: {$ref: '#/components/schemas/AdminNotice'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/admin/notice-versions/{noticeVersionId}/publish:
+    post:
+      tags: [Admin]
+      operationId: publishNoticeVersion
+      description: Requires an independent matching notice approval digest.
+      parameters:
+        - {name: noticeVersionId, in: path, required: true, schema: {$ref: '#/components/schemas/Ulid'}}
+        - {$ref: '#/components/parameters/CsrfToken'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+        - {$ref: '#/components/parameters/ReauthenticationProof'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [approvedTargetDigest]
+              properties: {approvedTargetDigest: {type: string, pattern: '^[0-9a-f]{64}$'}}
+      responses:
+        '200': {description: Approved notice version published., content: {application/json: {schema: {$ref: '#/components/schemas/AdminNotice'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/admin/problem-batches:
+    post:
+      tags: [Admin]
+      operationId: generateProblemBatch
+      description: Owner-only, MFA/recent-auth required. Generates the full month two months ahead with bounded retries.
+      parameters: [{$ref: '#/components/parameters/CsrfToken'}, {$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/ReauthenticationProof'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [calendarMonth]
+              properties: {calendarMonth: {type: string, pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'}}
+      responses:
+        '202': {description: Generation job accepted., content: {application/json: {schema: {$ref: '#/components/schemas/Job'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/admin/reports/{reportId}/decision:
+    post:
+      tags: [Admin]
+      operationId: decideReport
+      parameters:
+        - {name: reportId, in: path, required: true, schema: {$ref: '#/components/schemas/Ulid'}}
+        - {$ref: '#/components/parameters/CsrfToken'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+        - {$ref: '#/components/parameters/ReauthenticationProof'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [decision, reason]
+              properties:
+                decision: {type: string, enum: [valid, invalid, resolved]}
+                reason: {type: string, minLength: 1, maxLength: 2000}
+      responses:
+        '200': {description: Audited decision; no automatic correction publication., content: {application/json: {schema: {$ref: '#/components/schemas/Report'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/admin/approvals:
+    post:
+      tags: [Admin]
+      operationId: createApproval
+      description: Correction and notice require separate calls and exact target digests.
+      parameters: [{$ref: '#/components/parameters/CsrfToken'}, {$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/ReauthenticationProof'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [action, targetId, targetDigest, reason]
+              properties:
+                action: {type: string, enum: [correction, notice]}
+                targetId: {$ref: '#/components/schemas/Ulid'}
+                targetDigest: {type: string, pattern: '^[0-9a-f]{64}$'}
+                reason: {type: string, minLength: 1, maxLength: 2000}
+      responses:
+        '201': {description: Audited approval stored., content: {application/json: {schema: {$ref: '#/components/schemas/Approval'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/admin/entitlements:
+    post:
+      tags: [Admin]
+      operationId: changePremiumEntitlement
+      parameters: [{$ref: '#/components/parameters/CsrfToken'}, {$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/ReauthenticationProof'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [userId, action, reason]
+              properties:
+                userId: {$ref: '#/components/schemas/Ulid'}
+                action: {type: string, enum: [grant, revoke]}
+                validUntil: {type: [string, 'null'], format: date-time}
+                reason: {type: string, minLength: 1, maxLength: 500}
+      responses:
+        '200': {description: Server-authoritative entitlement changed and audited., content: {application/json: {schema: {$ref: '#/components/schemas/Entitlement'}}}}
+        default: {$ref: '#/components/responses/Error'}
+components:
+  securitySchemes:
+    sessionCookie: {type: apiKey, in: cookie, name: __Host-schemasprint_session}
+  parameters:
+    OAuthProvider: {name: provider, in: path, required: true, schema: {type: string, enum: [google, github]}}
+    CsrfToken: {name: X-CSRF-Token, in: header, required: true, schema: {type: string, minLength: 32, maxLength: 256}}
+    IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, format: uuid}}
+    ReauthenticationProof: {name: X-Reauthentication-Proof, in: header, required: true, schema: {type: string, minLength: 32, maxLength: 512}}
+    ProblemId: {name: problemId, in: path, required: true, schema: {$ref: '#/components/schemas/Ulid'}}
+    SubmissionId: {name: submissionId, in: path, required: true, schema: {$ref: '#/components/schemas/Ulid'}}
+    ProblemVersionId: {name: problemVersionId, in: path, required: true, schema: {$ref: '#/components/schemas/Ulid'}}
+    Locale: {name: locale, in: query, schema: {$ref: '#/components/schemas/Locale'}}
+    Cursor: {name: cursor, in: query, schema: {type: string, maxLength: 512}}
+    Limit: {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 30}}
+  responses:
+    Error:
+      description: Structured safe error.
+      content: {application/problem+json: {schema: {$ref: '#/components/schemas/ProblemError'}}}
+    Conflict:
+      description: Idempotency payload or optimistic-revision conflict.
+      content: {application/problem+json: {schema: {$ref: '#/components/schemas/ProblemError'}}}
+  schemas:
+    Ulid: {type: string, pattern: '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'}
+    Locale: {type: string, enum: [en, ja, zh-CN, ko, es, pt-BR]}
+    Difficulty: {type: string, enum: [easy, mid, hard]}
+    InputFormat: {type: string, enum: [gui, mermaid, ddl, dbml, mixed]}
+    SessionState:
+      type: object
+      additionalProperties: false
+      required: [authenticated, csrfToken]
+      properties:
+        authenticated: {type: boolean}
+        csrfToken: {type: [string, 'null']}
+        profile: {anyOf: [{$ref: '#/components/schemas/Profile'}, {type: 'null'}]}
+        gates:
+          type: object
+          additionalProperties: false
+          properties:
+            allowlisted: {type: boolean}
+            identityVerified: {type: boolean}
+            ageDeclared: {type: boolean}
+            policiesCurrent: {type: boolean}
+            mfaCurrent: {type: boolean}
+    Profile:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, locale, theme, roles, entitlement]
+      properties:
+        id: {$ref: '#/components/schemas/Ulid'}
+        displayName: {type: string}
+        locale: {$ref: '#/components/schemas/Locale'}
+        theme: {type: string, enum: [system, light, dark]}
+        roles: {type: array, uniqueItems: true, items: {type: string, enum: [learner, moderator, admin, owner]}}
+        entitlement: {$ref: '#/components/schemas/Entitlement'}
+    Entitlement:
+      type: object
+      additionalProperties: false
+      required: [premium, billingEnabled, adsEnabled]
+      properties:
+        premium: {type: boolean}
+        validUntil: {type: [string, 'null'], format: date-time}
+        billingEnabled: {type: boolean, const: false}
+        adsEnabled: {type: boolean, const: false}
+    Policy:
+      type: object
+      additionalProperties: false
+      required: [id, kind, version, content, requiredFrom, acknowledged]
+      properties:
+        id: {$ref: '#/components/schemas/Ulid'}
+        kind: {type: string, enum: [terms, privacy, community]}
+        version: {type: integer, minimum: 1}
+        content: {type: string}
+        requiredFrom: {type: string, format: date-time}
+        acknowledged: {type: boolean}
+    ProblemSummary:
+      type: object
+      additionalProperties: false
+      required: [id, version, title, difficulty, genre, inputFormat, tags, publicationDate, passed, submitted]
+      properties:
+        id: {$ref: '#/components/schemas/Ulid'}
+        version: {type: integer, minimum: 1}
+        title: {type: string}
+        difficulty: {$ref: '#/components/schemas/Difficulty'}
+        genre: {type: string}
+        inputFormat: {$ref: '#/components/schemas/InputFormat'}
+        tags: {type: array, items: {type: string}}
+        publicationDate: {type: string, format: date}
+        passed: {type: boolean}
+        submitted: {type: boolean}
+        translationStatus: {type: string, enum: [source, translated, pending, unavailable]}
+    ProblemDetail:
+      allOf:
+        - {$ref: '#/components/schemas/ProblemSummary'}
+        - type: object
+          required: [problemVersionId, statement, officialAnswer, explanation, rubricSummary]
+          properties:
+            problemVersionId: {$ref: '#/components/schemas/Ulid'}
+            statement: {type: string}
+            officialAnswer: {$ref: '#/components/schemas/CanonicalSchema'}
+            explanation: {type: string}
+            sourceLanguage: {type: string, const: en}
+            requestedLocale: {$ref: '#/components/schemas/Locale'}
+            rubricSummary:
+              type: array
+              items:
+                type: object
+                required: [id, description, weight, critical, implicit]
+                properties:
+                  id: {$ref: '#/components/schemas/Ulid'}
+                  description: {type: string}
+                  weight: {type: integer, minimum: 1, maximum: 1000000}
+                  critical: {type: boolean}
+                  implicit: {type: boolean}
+    ProblemPage:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/ProblemSummary'}}
+        nextCursor: {type: [string, 'null']}
+    CanonicalSchema:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, tables, relationships]
+      properties:
+        schemaVersion: {type: integer, const: 1}
+        tables:
+          type: array
+          maxItems: 200
+          items: {$ref: '#/components/schemas/SchemaTable'}
+        relationships:
+          type: array
+          maxItems: 2000
+          items: {$ref: '#/components/schemas/SchemaRelationship'}
+        enums: {type: array, maxItems: 200, items: {type: object}}
+        views: {type: array, maxItems: 200, items: {type: object}}
+        triggers: {type: array, maxItems: 200, items: {type: object}}
+        policies: {type: array, maxItems: 500, items: {type: object}}
+        partitions: {type: array, maxItems: 200, items: {type: object}}
+    SchemaTable:
+      type: object
+      additionalProperties: false
+      required: [id, name, columns, indexes, checks, position]
+      properties:
+        id: {type: string, minLength: 1, maxLength: 128}
+        name: {type: string, minLength: 1, maxLength: 128}
+        columns:
+          type: array
+          maxItems: 200
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, name, dataType, nullable]
+            properties:
+              id: {type: string, minLength: 1, maxLength: 128}
+              name: {type: string, minLength: 1, maxLength: 128}
+              dataType: {type: string, minLength: 1, maxLength: 256}
+              nullable: {type: boolean}
+              primaryKey: {type: boolean, default: false}
+              defaultExpression: {type: [string, 'null'], maxLength: 2000}
+              generatedExpression: {type: [string, 'null'], maxLength: 2000}
+        indexes: {type: array, maxItems: 200, items: {type: object}}
+        checks: {type: array, maxItems: 200, items: {type: object}}
+        position:
+          type: object
+          required: [x, y]
+          properties: {x: {type: number}, y: {type: number}}
+    SchemaRelationship:
+      type: object
+      additionalProperties: false
+      required: [id, fromTableId, fromColumnIds, toTableId, toColumnIds, fromCardinality, toCardinality]
+      properties:
+        id: {type: string, minLength: 1, maxLength: 128}
+        fromTableId: {type: string}
+        fromColumnIds: {type: array, minItems: 1, maxItems: 32, items: {type: string}}
+        toTableId: {type: string}
+        toColumnIds: {type: array, minItems: 1, maxItems: 32, items: {type: string}}
+        fromCardinality: {type: string, enum: ['0..1', '1', '0..*', '1..*']}
+        toCardinality: {type: string, enum: ['0..1', '1', '0..*', '1..*']}
+        onDelete: {type: string, enum: [no_action, restrict, cascade, set_null, set_default]}
+    EditorSources:
+      type: object
+      additionalProperties: false
+      properties:
+        ddl: {type: string, maxLength: 1048576}
+        mermaid: {type: string, maxLength: 1048576}
+        dbml: {type: string, maxLength: 1048576}
+        activeFormat: {$ref: '#/components/schemas/InputFormat'}
+        warnings: {type: array, maxItems: 500, items: {type: string}}
+    DraftWrite:
+      type: object
+      additionalProperties: false
+      required: [canonicalSchema, editorSources, layout]
+      properties:
+        canonicalSchema: {$ref: '#/components/schemas/CanonicalSchema'}
+        editorSources: {$ref: '#/components/schemas/EditorSources'}
+        layout: {type: object}
+    Draft:
+      allOf:
+        - {$ref: '#/components/schemas/DraftWrite'}
+        - type: object
+          required: [problemId, revision, updatedAt]
+          properties:
+            problemId: {$ref: '#/components/schemas/Ulid'}
+            revision: {type: integer, minimum: 1}
+            updatedAt: {type: string, format: date-time}
+    SubmissionCreate:
+      type: object
+      additionalProperties: false
+      required: [problemId, problemVersionId, canonicalSchema, editorSources, staticAnalysis]
+      properties:
+        problemId: {$ref: '#/components/schemas/Ulid'}
+        problemVersionId: {$ref: '#/components/schemas/Ulid'}
+        canonicalSchema: {$ref: '#/components/schemas/CanonicalSchema'}
+        editorSources: {$ref: '#/components/schemas/EditorSources'}
+        staticAnalysis:
+          type: object
+          required: [parserVersion, diagnostics]
+          properties:
+            parserVersion: {type: string, minLength: 1, maxLength: 100}
+            diagnostics: {type: array, maxItems: 2000, items: {type: object}}
+    Submission:
+      type: object
+      additionalProperties: false
+      required: [id, problemId, problemVersionId, state, canonicalSchema, createdAt]
+      properties:
+        id: {$ref: '#/components/schemas/Ulid'}
+        problemId: {$ref: '#/components/schemas/Ulid'}
+        problemVersionId: {$ref: '#/components/schemas/Ulid'}
+        state: {type: string, enum: [pending, assessed, failed]}
+        canonicalSchema: {$ref: '#/components/schemas/CanonicalSchema'}
+        result: {anyOf: [{$ref: '#/components/schemas/AssessmentResult'}, {type: 'null'}]}
+        failureCode: {type: [string, 'null']}
+        createdAt: {type: string, format: date-time}
+    AssessmentResult:
+      type: object
+      additionalProperties: false
+      required: [score, exactFull, passed, contradiction, confidence, requirements]
+      properties:
+        score: {type: number, minimum: 0, maximum: 100, multipleOf: 0.1}
+        exactFull: {type: boolean}
+        passed: {type: boolean}
+        contradiction: {type: boolean}
+        confidence: {type: number, minimum: 0, maximum: 100}
+        requirements:
+          type: array
+          maxItems: 2000
+          items:
+            type: object
+            required: [rubricItemId, decision, source, impact]
+            properties:
+              rubricItemId: {$ref: '#/components/schemas/Ulid'}
+              decision: {type: string, enum: [satisfied, not_met]}
+              source: {type: string, enum: [static, jev]}
+              confidence: {type: [number, 'null'], minimum: 0, maximum: 100}
+              impact: {type: string}
+    TranslatedContent:
+      type: object
+      additionalProperties: false
+      required: [contentKind, contentId, contentVersion, locale, sourceEn, content, status, identifiersPreserved]
+      properties:
+        contentKind: {type: string, enum: [problem_statement, problem_explanation, feedback, community_post, notice]}
+        contentId: {$ref: '#/components/schemas/Ulid'}
+        contentVersion: {type: integer, minimum: 1}
+        locale: {$ref: '#/components/schemas/Locale'}
+        sourceEn: {type: string}
+        content: {type: string}
+        status: {type: string, enum: [source, translated, pending, unavailable]}
+        identifiersPreserved: {type: boolean}
+    Feedback:
+      type: object
+      required: [id, version, content, contentEn, sourceLanguage, translationStatus, modelVersion, createdAt]
+      properties:
+        id: {$ref: '#/components/schemas/Ulid'}
+        version: {type: integer, minimum: 1}
+        content: {type: string}
+        contentEn: {type: string}
+        sourceLanguage: {type: string, const: en}
+        translationStatus: {type: string, enum: [source, translated, pending, unavailable]}
+        modelVersion: {type: string}
+        createdAt: {type: string, format: date-time}
+    RewardAttempt:
+      type: object
+      required: [id, state]
+      properties:
+        id: {$ref: '#/components/schemas/Ulid'}
+        state: {type: string, enum: [pending, verified, consumed, failed, no_fill, blocked]}
+    Dashboard:
+      type: object
+      additionalProperties: false
+      required: [uniquePassed, byDifficulty, byWeekday, calendar]
+      properties:
+        uniquePassed: {type: integer, minimum: 0}
+        byDifficulty: {type: object, additionalProperties: {type: integer, minimum: 0}}
+        byWeekday: {type: object, additionalProperties: {type: integer, minimum: 0}}
+        calendar:
+          type: array
+          items:
+            type: object
+            required: [publicationDate, passedProblemIds]
+            properties:
+              publicationDate: {type: string, format: date}
+              passedProblemIds: {type: array, uniqueItems: true, items: {$ref: '#/components/schemas/Ulid'}}
+    CommunityPost:
+      type: object
+      required: [id, submissionId, authorDisplayName, explanation, originalExplanation, sourceLanguage, schema, moderationState, problemVersion]
+      properties:
+        id: {$ref: '#/components/schemas/Ulid'}
+        submissionId: {$ref: '#/components/schemas/Ulid'}
+        authorDisplayName: {type: string}
+        explanation: {type: string}
+        originalExplanation: {type: string}
+        sourceLanguage: {type: string}
+        schema: {$ref: '#/components/schemas/CanonicalSchema'}
+        moderationState: {type: string, enum: [held, approved, rejected]}
+        problemVersion: {type: integer, minimum: 1}
+        oldVersion: {type: boolean}
+    CommunityPostPage:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/CommunityPost'}}
+        nextCursor: {type: [string, 'null']}
+    PostPage:
+      type: object
+      required: [officialAnswer, items]
+      properties:
+        officialAnswer: {$ref: '#/components/schemas/CanonicalSchema'}
+        items: {type: array, items: {$ref: '#/components/schemas/CommunityPost'}}
+        nextCursor: {type: [string, 'null']}
+    ReportCreate:
+      type: object
+      additionalProperties: false
+      required: [category, targetId, description]
+      properties:
+        category: {type: string, enum: [problem, official_answer, grading, translation, other]}
+        targetId: {$ref: '#/components/schemas/Ulid'}
+        description: {type: string, minLength: 1, maxLength: 5000}
+    Report:
+      allOf:
+        - {$ref: '#/components/schemas/ReportCreate'}
+        - type: object
+          required: [id, state, createdAt]
+          properties:
+            id: {$ref: '#/components/schemas/Ulid'}
+            state: {type: string, enum: [open, valid, invalid, resolved]}
+            createdAt: {type: string, format: date-time}
+    ReportPage:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Report'}}
+        nextCursor: {type: [string, 'null']}
+    NoticePage:
+      type: object
+      required: [items, unreadCount]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [id, versionId, title, body, publishedAt, read]
+            properties:
+              id: {$ref: '#/components/schemas/Ulid'}
+              versionId: {$ref: '#/components/schemas/Ulid'}
+              title: {type: string}
+              body: {type: string}
+              publishedAt: {type: string, format: date-time}
+              read: {type: boolean}
+        unreadCount: {type: integer, minimum: 0}
+        nextCursor: {type: [string, 'null']}
+    Job:
+      type: object
+      additionalProperties: false
+      required: [id, kind, state]
+      properties:
+        id: {$ref: '#/components/schemas/Ulid'}
+        kind: {type: string}
+        state: {type: string, enum: [pending, leased, succeeded, failed]}
+        retryAfterSeconds: {type: integer, minimum: 1, maximum: 3600}
+        failureCode: {type: [string, 'null']}
+    Approval:
+      type: object
+      required: [id, action, targetId, targetDigest, approvedAt]
+      properties:
+        id: {$ref: '#/components/schemas/Ulid'}
+        action: {type: string, enum: [correction, notice]}
+        targetId: {$ref: '#/components/schemas/Ulid'}
+        targetDigest: {type: string}
+        approvedAt: {type: string, format: date-time}
+    ProblemVersionWrite:
+      type: object
+      additionalProperties: false
+      required: [title, statementEn, officialSolution, explanationEn, difficulty, genre, inputFormat, tags, rubric]
+      properties:
+        title: {type: string, minLength: 1, maxLength: 200}
+        statementEn: {type: string, minLength: 1, maxLength: 100000}
+        officialSolution: {$ref: '#/components/schemas/CanonicalSchema'}
+        explanationEn: {type: string, minLength: 1, maxLength: 100000}
+        difficulty: {$ref: '#/components/schemas/Difficulty'}
+        genre: {type: string, minLength: 1, maxLength: 64}
+        inputFormat: {$ref: '#/components/schemas/InputFormat'}
+        tags: {type: array, maxItems: 50, uniqueItems: true, items: {type: string, maxLength: 64}}
+        rubric:
+          type: array
+          minItems: 1
+          maxItems: 2000
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, descriptionEn, weight, critical, implicit, evaluatorSpec]
+            properties:
+              id: {$ref: '#/components/schemas/Ulid'}
+              descriptionEn: {type: string, minLength: 1, maxLength: 5000}
+              weight: {type: integer, minimum: 1, maximum: 1000000}
+              critical: {type: boolean}
+              implicit: {type: boolean}
+              textualDerivation: {type: [string, 'null'], maxLength: 5000}
+              evaluatorSpec: {type: object}
+    AdminProblemVersion:
+      allOf:
+        - {$ref: '#/components/schemas/ProblemVersionWrite'}
+        - type: object
+          required: [id, problemId, version, state, contentDigest]
+          properties:
+            id: {$ref: '#/components/schemas/Ulid'}
+            problemId: {$ref: '#/components/schemas/Ulid'}
+            version: {type: integer, minimum: 1}
+            state: {type: string, enum: [draft, validated, approved, published, retired]}
+            contentDigest: {type: string, pattern: '^[0-9a-f]{64}$'}
+            validationJobId: {anyOf: [{$ref: '#/components/schemas/Ulid'}, {type: 'null'}]}
+    NoticeWrite:
+      type: object
+      additionalProperties: false
+      required: [titleEn, bodyEn, targetDigest]
+      properties:
+        titleEn: {type: string, minLength: 1, maxLength: 200}
+        bodyEn: {type: string, minLength: 1, maxLength: 100000}
+        targetDigest: {type: string, pattern: '^[0-9a-f]{64}$'}
+    AdminNotice:
+      allOf:
+        - {$ref: '#/components/schemas/NoticeWrite'}
+        - type: object
+          required: [id, versionId, version, state]
+          properties:
+            id: {$ref: '#/components/schemas/Ulid'}
+            versionId: {$ref: '#/components/schemas/Ulid'}
+            version: {type: integer, minimum: 1}
+            state: {type: string, enum: [draft, approved, published, retired]}
+            publishedAt: {type: [string, 'null'], format: date-time}
+    ProblemError:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, code, requestId]
+      properties:
+        type: {type: string, format: uri-reference}
+        title: {type: string}
+        status: {type: integer, minimum: 400, maximum: 599}
+        code: {type: string, pattern: '^[A-Z][A-Z0-9_]{2,63}$'}
+        detail: {type: string, maxLength: 1000}
+        requestId: {type: string}
+        retryable: {type: boolean}
+        retryAfterSeconds: {type: integer, minimum: 1, maximum: 86400}

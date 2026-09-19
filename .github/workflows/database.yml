@@ -1,4 +1,4 @@
-name: Database quality
+name: Foundation quality
 on:
   push:
   pull_request:
@@ -19,4 +19,5 @@ jobs:
       - run: uv run ruff format --check tests
       - run: uv run mypy tests
       - run: uv run sqlfluff lint db
-      - run: uv run pytest tests/db -q
+      - run: uv run python -m openapi_spec_validator openapi.yaml
+      - run: uv run pytest tests -q
