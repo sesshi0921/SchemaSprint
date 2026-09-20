@@ -19,7 +19,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Any, Literal, Self
+from typing import Any, Literal, Self, cast
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -248,6 +248,101 @@ class NoticePageModel(BaseModel):
 
     items: list[NoticeItemModel]
     unreadCount: int = Field(ge=0)
+    nextCursor: str | None = None
+
+
+class FeedbackModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    version: int = Field(ge=1)
+    content: str
+    contentEn: str
+    sourceLanguage: Literal["en"] = "en"
+    translationStatus: Literal["source", "translated", "pending", "unavailable"]
+    modelVersion: str
+    createdAt: datetime
+
+
+class JobModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    kind: str
+    state: Literal["pending", "leased", "succeeded", "failed"]
+    retryAfterSeconds: int | None = Field(default=None, ge=1, le=3600)
+    failureCode: str | None = None
+
+
+class TranslatedContentModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contentKind: Literal[
+        "problem_statement",
+        "problem_explanation",
+        "feedback",
+        "community_post",
+        "notice",
+    ]
+    contentId: str
+    contentVersion: int = Field(ge=1)
+    locale: Locale
+    sourceEn: str
+    content: str
+    status: Literal["source", "translated", "pending", "unavailable"]
+    identifiersPreserved: bool
+
+
+class CommunityPostModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    submissionId: str
+    authorDisplayName: str
+    explanation: str
+    originalExplanation: str
+    sourceLanguage: str
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    schema_: CanonicalSchemaModel = Field(alias="schema")
+    moderationState: Literal["held", "approved", "rejected"]
+    problemVersion: int = Field(ge=1)
+    oldVersion: bool = False
+
+
+class CommunityPostCreateModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    submissionId: str = Field(pattern=r"^[0-7][0-9A-HJKMNP-TV-Z]{25}$")
+    explanation: str = Field(min_length=1, max_length=10000)
+
+
+class PostPageModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    officialAnswer: CanonicalSchemaModel
+    items: list[CommunityPostModel]
+    nextCursor: str | None = None
+
+
+class ReportCreateModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    category: Literal["problem", "official_answer", "grading", "translation", "other"]
+    targetId: str = Field(pattern=r"^[0-7][0-9A-HJKMNP-TV-Z]{25}$")
+    description: str = Field(min_length=1, max_length=5000)
+
+
+class ReportModel(ReportCreateModel):
+    id: str
+    state: Literal["open", "valid", "invalid", "resolved"]
+    createdAt: datetime
+
+
+class ReportPageModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[ReportModel]
     nextCursor: str | None = None
 
 
@@ -1101,6 +1196,84 @@ class LearnerRepository:
             ],
         )
 
+    async def complete_onboarding(
+        self,
+        principal: Principal,
+        *,
+        display_name: str | None,
+        is_at_least_16: bool,
+        policy_version_ids: list[str],
+    ) -> ProfileModel:
+        """Persist the age declaration and exact current policy acknowledgements."""
+        if not is_at_least_16:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "AGE_GATE_REQUIRED"
+            )
+        if not principal.allowlisted or not principal.identity_verified:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "ALLOWLIST_REQUIRED")
+        requested = set(policy_version_ids)
+        if len(requested) != len(policy_version_ids):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "DUPLICATE_POLICY_ACKNOWLEDGEMENT"
+            )
+        async with self.database.privileged() as connection:
+            latest_rows = await (
+                await connection.execute(
+                    """
+                    SELECT pv.id::text
+                    FROM public.policy_versions pv
+                    JOIN (
+                        SELECT kind, max(version) AS version
+                        FROM public.policy_versions
+                        WHERE required_from <= now()
+                        GROUP BY kind
+                    ) latest ON latest.kind=pv.kind AND latest.version=pv.version
+                    """
+                )
+            ).fetchall()
+            latest = {str(row["id"]) for row in latest_rows}
+            if requested != latest:
+                raise HTTPException(status.HTTP_409_CONFLICT, "POLICY_VERSION_OUTDATED")
+            await connection.execute(
+                """
+                INSERT INTO public.age_declarations(user_id, is_at_least_16)
+                VALUES (%s, true)
+                ON CONFLICT (user_id) DO UPDATE SET is_at_least_16=true, declared_at=now()
+                """,
+                (principal.user_id,),
+            )
+            if display_name is not None:
+                await connection.execute(
+                    "UPDATE public.users SET display_name=%s, updated_at=now() WHERE id=%s",
+                    (display_name, principal.user_id),
+                )
+            for policy_id in latest:
+                await connection.execute(
+                    """
+                    INSERT INTO public.policy_acknowledgements(user_id, policy_version_id)
+                    VALUES (%s,%s) ON CONFLICT DO NOTHING
+                    """,
+                    (principal.user_id, policy_id),
+                )
+        profile = await self.profile(principal)
+        if profile is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "PROFILE_NOT_FOUND")
+        return profile
+
+    async def enqueue_job(
+        self, principal: Principal, *, kind: str, payload: Mapping[str, Any]
+    ) -> JobModel:
+        job_id = str(__import__("ulid").new())
+        async with self.database.privileged() as connection:
+            await connection.execute(
+                """
+                INSERT INTO private.jobs(id, owner_user_id, kind, payload)
+                VALUES (%s,%s,%s,%s::jsonb)
+                """,
+                (job_id, principal.user_id, kind, json.dumps(dict(payload))),
+            )
+        return JobModel(id=job_id, kind=kind, state="pending")
+
     async def policies(self, principal: Principal) -> list[PolicyModel]:
         query = """
             SELECT pv.id::text, pv.kind, pv.version, pv.content_en, pv.required_from,
@@ -1293,6 +1466,389 @@ class LearnerRepository:
                 (notice_version_id,),
             )
 
+    async def list_feedback(
+        self, principal: Principal, submission_id: str, locale: Locale
+    ) -> list[FeedbackModel]:
+        """Return only feedback owned by the submission owner.
+
+        Translation is intentionally cache-only.  Calling this endpoint never
+        invents translated content when the configured NMT provider is absent.
+        """
+        query = """
+            SELECT fv.id::text, fv.version, fv.content_en, fv.model_version,
+                   fv.created_at,
+                   tc.translated_text
+            FROM public.feedback_versions fv
+            JOIN public.submissions s ON s.id=fv.submission_id
+            LEFT JOIN public.translation_cache tc ON tc.content_kind='feedback'
+              AND tc.content_id=fv.id AND tc.content_version=fv.version
+              AND tc.locale=%s AND tc.owner_user_id=public.current_user_id()
+            WHERE fv.submission_id=%s AND s.user_id=public.current_user_id()
+            ORDER BY fv.version
+        """
+        async with self.database.as_user(principal) as connection:
+            rows = await (
+                await connection.execute(query, (locale.value, submission_id))
+            ).fetchall()
+        result: list[FeedbackModel] = []
+        for row in rows:
+            translated = row["translated_text"]
+            result.append(
+                FeedbackModel(
+                    id=row["id"],
+                    version=row["version"],
+                    content=translated or row["content_en"],
+                    contentEn=row["content_en"],
+                    translationStatus=(
+                        "translated"
+                        if translated is not None
+                        else "source"
+                        if locale is Locale.EN
+                        else "unavailable"
+                    ),
+                    modelVersion=row["model_version"],
+                    createdAt=row["created_at"],
+                )
+            )
+        return result
+
+    async def get_job(self, principal: Principal, job_id: str) -> JobModel | None:
+        async with self.database.privileged() as connection:
+            row = await (
+                await connection.execute(
+                    """
+                    SELECT id::text, kind, state::text, available_at, last_error_code
+                    FROM private.jobs
+                    WHERE id=%s AND owner_user_id=%s
+                    """,
+                    (job_id, principal.user_id),
+                )
+            ).fetchone()
+        if row is None:
+            return None
+        retry_after = (
+            max(
+                1,
+                min(
+                    3600,
+                    int(
+                        (
+                            row["available_at"]
+                            - datetime.now(row["available_at"].tzinfo)
+                        ).total_seconds()
+                    ),
+                ),
+            )
+            if row["state"] == "pending"
+            and row["available_at"] > datetime.now(row["available_at"].tzinfo)
+            else None
+        )
+        return JobModel(
+            id=row["id"],
+            kind=row["kind"],
+            state=row["state"],
+            retryAfterSeconds=retry_after,
+            failureCode=row["last_error_code"],
+        )
+
+    async def translation(
+        self,
+        principal: Principal,
+        content_kind: str,
+        content_id: str,
+        content_version: int,
+        locale: Locale,
+    ) -> tuple[TranslatedContentModel, bool]:
+        """Read a cached NMT result, or return an honest source fallback.
+
+        The boolean indicates whether the caller should use HTTP 202 because a
+        translation is unavailable and would require an external worker.
+        """
+        if content_kind not in {
+            "problem_statement",
+            "problem_explanation",
+            "feedback",
+            "community_post",
+            "notice",
+        }:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "CONTENT_NOT_FOUND")
+        async with self.database.as_user(principal) as connection:
+            source_row = None
+            if content_kind in {"problem_statement", "problem_explanation"}:
+                column = (
+                    "statement_en"
+                    if content_kind == "problem_statement"
+                    else "explanation_en"
+                )
+                source_row = await (
+                    await connection.execute(
+                        f"""SELECT {column} AS source_en, version
+                            FROM public.problem_versions
+                            WHERE id=%s AND version=%s""",
+                        (content_id, content_version),
+                    )
+                ).fetchone()
+            elif content_kind == "feedback":
+                source_row = await (
+                    await connection.execute(
+                        """SELECT fv.content_en AS source_en, fv.version
+                           FROM public.feedback_versions fv
+                           JOIN public.submissions s ON s.id=fv.submission_id
+                           WHERE fv.id=%s AND fv.version=%s
+                             AND s.user_id=public.current_user_id()""",
+                        (content_id, content_version),
+                    )
+                ).fetchone()
+            elif content_kind == "community_post":
+                source_row = await (
+                    await connection.execute(
+                        """SELECT explanation AS source_en, 1 AS version
+                           FROM public.posts WHERE id=%s AND moderation_state='approved'""",
+                        (content_id,),
+                    )
+                ).fetchone()
+            else:
+                source_row = await (
+                    await connection.execute(
+                        """SELECT body_en AS source_en, nv.version
+                           FROM public.notice_versions nv
+                           WHERE nv.id=%s AND nv.version=%s
+                             AND nv.state='published' AND nv.published_at <= now()""",
+                        (content_id, content_version),
+                    )
+                ).fetchone()
+            if source_row is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "CONTENT_NOT_FOUND")
+            source_en = str(source_row["source_en"])
+            cache = await (
+                await connection.execute(
+                    """SELECT translated_text FROM public.translation_cache
+                       WHERE content_kind=%s AND content_id=%s
+                         AND content_version=%s AND locale=%s
+                         AND (owner_user_id IS NULL OR owner_user_id=public.current_user_id())
+                       ORDER BY owner_user_id NULLS LAST LIMIT 1""",
+                    (content_kind, content_id, content_version, locale.value),
+                )
+            ).fetchone()
+        if locale is Locale.EN:
+            return TranslatedContentModel(
+                contentKind=cast(Any, content_kind),
+                contentId=content_id,
+                contentVersion=content_version,
+                locale=locale,
+                sourceEn=source_en,
+                content=source_en,
+                status="source",
+                identifiersPreserved=True,
+            ), False
+        if cache is not None:
+            return TranslatedContentModel(
+                contentKind=cast(Any, content_kind),
+                contentId=content_id,
+                contentVersion=content_version,
+                locale=locale,
+                sourceEn=source_en,
+                content=cache["translated_text"],
+                status="translated",
+                identifiersPreserved=True,
+            ), False
+        return TranslatedContentModel(
+            contentKind=cast(Any, content_kind),
+            contentId=content_id,
+            contentVersion=content_version,
+            locale=locale,
+            sourceEn=source_en,
+            content=source_en,
+            status="pending",
+            identifiersPreserved=True,
+        ), True
+
+    async def list_posts(
+        self,
+        principal: Principal,
+        problem_id: str,
+        cursor: str | None,
+        limit: int,
+        locale: Locale,
+    ) -> PostPageModel:
+        del locale  # Cached translations are requested through /translations.
+        problem = await self.detail(principal, problem_id, Locale.EN, None)
+        if problem is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "PROBLEM_NOT_FOUND")
+        filters = {"problemId": problem_id}
+        position = None
+        if cursor:
+            position = _Cursor(self.settings.session_pepper.get_secret_value()).decode(
+                cursor, filters
+            )
+        params: list[Any] = [problem_id]
+        cursor_clause = ""
+        if position:
+            cursor_clause = " AND (p.published_at,p.id) < (%s,%s)"
+            params.extend([position.get("publishedAt"), position.get("id")])
+        params.append(limit + 1)
+        query = f"""
+            SELECT p.id::text, p.submission_id::text, u.display_name,
+                   p.explanation, p.schema_snapshot, p.moderation_state::text,
+                   pv.version, s.problem_version_id::text,
+                   (s.problem_version_id <> pc.problem_version_id) AS old_version,
+                   p.published_at
+            FROM public.posts p
+            JOIN public.submissions s ON s.id=p.submission_id
+            JOIN public.users u ON u.id=p.author_user_id
+            JOIN public.problem_versions pv ON pv.id=s.problem_version_id
+            JOIN public.publication_calendar pc ON pc.problem_id=s.problem_id
+            WHERE s.problem_id=%s AND p.moderation_state='approved'
+              AND p.published_at <= now(){cursor_clause}
+            ORDER BY p.published_at DESC,p.id DESC LIMIT %s
+        """
+        async with self.database.as_user(principal) as connection:
+            rows = await (await connection.execute(query, params)).fetchall()
+        items = [
+            CommunityPostModel.model_validate(
+                {
+                    "id": row["id"],
+                    "submissionId": row["submission_id"],
+                    "authorDisplayName": row["display_name"],
+                    "explanation": row["explanation"],
+                    "originalExplanation": row["explanation"],
+                    "sourceLanguage": "en",
+                    "schema": _schema(row["schema_snapshot"]),
+                    "moderationState": row["moderation_state"],
+                    "problemVersion": row["version"],
+                    "oldVersion": bool(row["old_version"]),
+                }
+            )
+            for row in rows[:limit]
+        ]
+        next_cursor = None
+        if len(rows) > limit:
+            last = rows[limit - 1]
+            next_cursor = _Cursor(
+                self.settings.session_pepper.get_secret_value()
+            ).with_filter_digest(
+                {"publishedAt": last["published_at"].isoformat(), "id": last["id"]},
+                filters,
+            )
+        return PostPageModel(
+            officialAnswer=_schema(problem.officialAnswer),
+            items=items,
+            nextCursor=next_cursor,
+        )
+
+    async def create_post(
+        self,
+        principal: Principal,
+        problem_id: str,
+        submission_id: str,
+        explanation: str,
+    ) -> CommunityPostModel:
+        async with self.database.privileged() as connection:
+            source = await (
+                await connection.execute(
+                    """SELECT s.problem_id::text, s.problem_version_id::text,
+                              pv.version, s.canonical_schema, sr.passed, sr.exact_full,
+                              u.display_name
+                       FROM public.submissions s
+                       JOIN public.submission_results sr ON sr.submission_id=s.id
+                       JOIN public.problem_versions pv ON pv.id=s.problem_version_id
+                       JOIN public.users u ON u.id=s.user_id
+                       WHERE s.id=%s AND s.user_id=%s""",
+                    (submission_id, principal.user_id),
+                )
+            ).fetchone()
+            if source is None or source["problem_id"] != problem_id:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "SUBMISSION_NOT_FOUND")
+            if not source["passed"] or not source["exact_full"]:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY, "EXACT_FULL_REQUIRED"
+                )
+            post_id = str(__import__("ulid").new())
+            row = await (
+                await connection.execute(
+                    """INSERT INTO public.posts
+                       (id,submission_id,author_user_id,explanation,schema_snapshot)
+                       VALUES (%s,%s,%s,%s,%s::jsonb)
+                       RETURNING id::text, moderation_state::text, created_at""",
+                    (
+                        post_id,
+                        submission_id,
+                        principal.user_id,
+                        explanation,
+                        json.dumps(source["canonical_schema"], separators=(",", ":")),
+                    ),
+                )
+            ).fetchone()
+        assert row is not None
+        return CommunityPostModel.model_validate(
+            {
+                "id": row["id"],
+                "submissionId": submission_id,
+                "authorDisplayName": source["display_name"],
+                "explanation": explanation,
+                "originalExplanation": explanation,
+                "sourceLanguage": "en",
+                "schema": _schema(source["canonical_schema"]),
+                "moderationState": row["moderation_state"],
+                "problemVersion": source["version"],
+                "oldVersion": False,
+            }
+        )
+
+    async def list_reports(self, principal: Principal, limit: int) -> ReportPageModel:
+        async with self.database.as_user(principal) as connection:
+            rows = await (
+                await connection.execute(
+                    """SELECT id::text, category, target_id::text, description, state, created_at
+                       FROM public.reports WHERE reporter_user_id=public.current_user_id()
+                       ORDER BY created_at DESC,id DESC LIMIT %s""",
+                    (limit,),
+                )
+            ).fetchall()
+        return ReportPageModel(
+            items=[
+                ReportModel(
+                    id=r["id"],
+                    category=r["category"],
+                    targetId=r["target_id"],
+                    description=r["description"],
+                    state=r["state"],
+                    createdAt=r["created_at"],
+                )
+                for r in rows
+            ]
+        )
+
+    async def create_report(
+        self, principal: Principal, payload: ReportCreateModel
+    ) -> ReportModel:
+        report_id = str(__import__("ulid").new())
+        async with self.database.privileged() as connection:
+            row = await (
+                await connection.execute(
+                    """INSERT INTO public.reports
+                       (id,reporter_user_id,category,target_id,description)
+                       VALUES (%s,%s,%s,%s,%s)
+                       RETURNING id::text, category, target_id::text, description, state, created_at""",
+                    (
+                        report_id,
+                        principal.user_id,
+                        payload.category,
+                        payload.targetId,
+                        payload.description,
+                    ),
+                )
+            ).fetchone()
+        assert row is not None
+        return ReportModel(
+            id=row["id"],
+            category=row["category"],
+            targetId=row["target_id"],
+            description=row["description"],
+            state=row["state"],
+            createdAt=row["created_at"],
+        )
+
 
 __all__ = [
     "CanonicalSchemaModel",
@@ -1314,4 +1870,13 @@ __all__ = [
     "SubmissionCreateModel",
     "SubmissionModel",
     "AssessmentResultModel",
+    "CommunityPostModel",
+    "CommunityPostCreateModel",
+    "FeedbackModel",
+    "JobModel",
+    "PostPageModel",
+    "ReportCreateModel",
+    "ReportModel",
+    "ReportPageModel",
+    "TranslatedContentModel",
 ]

@@ -31,20 +31,29 @@ from fastapi.responses import JSONResponse
 from .config import Settings
 from .database import Database
 from .learner import (
+    CommunityPostCreateModel,
+    CommunityPostModel,
     DashboardModel,
     Difficulty,
     DraftModel,
     DraftWriteModel,
+    FeedbackModel,
     InputFormat,
+    JobModel,
     LearnerRepository,
     NoticePageModel,
     PolicyModel,
+    PostPageModel,
     ProblemPageModel,
     ProblemStatus,
     ProfileModel,
     ProfilePatchModel,
+    ReportCreateModel,
+    ReportModel,
+    ReportPageModel,
     SubmissionCreateModel,
     SubmissionModel,
+    TranslatedContentModel,
 )
 from .problems import Locale, ProblemDetail
 from .security import Principal, require_csrf
@@ -150,6 +159,93 @@ def register_learner_routes(
     """Register routes against the app's existing authentication dependencies."""
     repository = LearnerRepository(database, settings)
     router = APIRouter(prefix="/api/v1")
+
+    @router.post("/onboarding", response_model=ProfileModel)
+    async def complete_onboarding(
+        request: Request,
+        payload: dict[str, Any],
+        principal: Principal = Depends(required_principal),
+        csrf: str = Header(alias="X-CSRF-Token"),
+        idempotency_key: UUID = Header(alias="Idempotency-Key"),
+    ) -> Response:
+        require_csrf(request, principal, settings.csrf_key.get_secret_value())
+        allowed = {"isAtLeast16", "displayName", "policyVersionIds"}
+        required = {"isAtLeast16", "policyVersionIds"}
+        if set(payload) - allowed or not required <= set(payload):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "INVALID_ONBOARDING_PAYLOAD"
+            )
+        if payload.get("isAtLeast16") is not True or not isinstance(
+            payload.get("policyVersionIds"), list
+        ):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "INVALID_ONBOARDING_PAYLOAD"
+            )
+        display_name = payload.get("displayName")
+        policy_ids = payload["policyVersionIds"]
+        if display_name is not None and (
+            not isinstance(display_name, str) or not 1 <= len(display_name) <= 64
+        ):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "INVALID_DISPLAY_NAME"
+            )
+        if not 1 <= len(policy_ids) <= 10 or any(
+            not isinstance(item, str) for item in policy_ids
+        ):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "INVALID_POLICY_VERSION_IDS"
+            )
+
+        async def action() -> tuple[int, object]:
+            profile = await repository.complete_onboarding(
+                principal,
+                display_name=display_name,
+                is_at_least_16=True,
+                policy_version_ids=policy_ids,
+            )
+            return status.HTTP_200_OK, profile
+
+        return await _idempotent(
+            database, principal, "complete-onboarding", idempotency_key, payload, action
+        )
+
+    @router.post(
+        "/account/export", response_model=JobModel, status_code=status.HTTP_202_ACCEPTED
+    )
+    async def request_account_export(
+        request: Request,
+        principal: Principal = Depends(required_principal),
+        csrf: str = Header(alias="X-CSRF-Token"),
+        idempotency_key: UUID = Header(alias="Idempotency-Key"),
+    ) -> Response:
+        require_csrf(request, principal, settings.csrf_key.get_secret_value())
+
+        async def action() -> tuple[int, object]:
+            job = await repository.enqueue_job(
+                principal, kind="account_export", payload={"userId": principal.user_id}
+            )
+            return status.HTTP_202_ACCEPTED, job
+
+        return await _idempotent(
+            database, principal, "account-export", idempotency_key, {}, action
+        )
+
+    @router.delete("/account")
+    async def delete_account(
+        request: Request,
+        principal: Principal = Depends(required_principal),
+        csrf: str = Header(alias="X-CSRF-Token"),
+        idempotency_key: UUID = Header(alias="Idempotency-Key"),
+        reauthentication_proof: str = Header(alias="X-Reauthentication-Proof"),
+    ) -> Response:
+        require_csrf(request, principal, settings.csrf_key.get_secret_value())
+        if len(reauthentication_proof) < 32:
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, "INVALID_REAUTHENTICATION_PROOF"
+            )
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "REAUTHENTICATION_UNAVAILABLE"
+        )
 
     @router.get("/problems", response_model=ProblemPageModel)
     async def list_problems(
@@ -299,6 +395,63 @@ def register_learner_routes(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "SUBMISSION_NOT_FOUND")
         return submission
 
+    @router.get(
+        "/submissions/{submissionId}/feedback", response_model=list[FeedbackModel]
+    )
+    async def list_feedback(
+        submissionId: UlidPath,
+        principal: Principal = Depends(learning_principal),
+        locale: Locale = Locale.EN,
+    ) -> list[FeedbackModel]:
+        return await repository.list_feedback(principal, submissionId, locale)
+
+    @router.post(
+        "/submissions/{submissionId}/feedback", response_model=JobModel, status_code=202
+    )
+    async def request_feedback(
+        request: Request,
+        submissionId: UlidPath,
+        principal: Principal = Depends(learning_principal),
+        csrf: str = Header(alias="X-CSRF-Token"),
+        idempotency_key: UUID = Header(alias="Idempotency-Key"),
+    ) -> Response:
+        require_csrf(request, principal, settings.csrf_key.get_secret_value())
+        # A provider adapter is intentionally not shipped as a fake.  Until a
+        # real Jev endpoint is configured, report a deterministic unavailable
+        # response rather than creating a job that can never complete.
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "JEV_UNAVAILABLE")
+
+    @router.post("/feedback-rewards", response_model=dict, status_code=201)
+    async def start_feedback_reward(
+        request: Request,
+        principal: Principal = Depends(learning_principal),
+        csrf: str = Header(alias="X-CSRF-Token"),
+        idempotency_key: UUID = Header(alias="Idempotency-Key"),
+    ) -> Response:
+        require_csrf(request, principal, settings.csrf_key.get_secret_value())
+        # Ads are explicitly disabled in the MVP; never claim an impression.
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "REWARDED_ADS_DISABLED"
+        )
+
+    @router.get(
+        "/translations/{contentKind}/{contentId}", response_model=TranslatedContentModel
+    )
+    async def get_translation(
+        contentKind: str,
+        contentId: UlidPath,
+        contentVersion: int = Query(ge=1),
+        locale: Locale = Locale.EN,
+        principal: Principal = Depends(learning_principal),
+    ) -> Response:
+        translated, queued = await repository.translation(
+            principal, contentKind, contentId, contentVersion, locale
+        )
+        return JSONResponse(
+            content=jsonable_encoder(translated),
+            status_code=status.HTTP_202_ACCEPTED if queued else status.HTTP_200_OK,
+        )
+
     @router.get("/dashboard", response_model=DashboardModel)
     async def get_dashboard(
         principal: Principal = Depends(learning_principal),
@@ -342,6 +495,86 @@ def register_learner_routes(
             {},
             action,
         )
+
+    @router.get("/problems/{problemId}/posts", response_model=PostPageModel)
+    async def list_posts(
+        problemId: UlidPath,
+        principal: Principal = Depends(learning_principal),
+        cursor: str | None = Query(default=None, max_length=512),
+        limit: int = Query(default=30, ge=1, le=100),
+        locale: Locale = Locale.EN,
+    ) -> PostPageModel:
+        return await repository.list_posts(principal, problemId, cursor, limit, locale)
+
+    @router.post(
+        "/problems/{problemId}/posts",
+        response_model=CommunityPostModel,
+        status_code=202,
+    )
+    async def create_post(
+        request: Request,
+        problemId: UlidPath,
+        payload: CommunityPostCreateModel,
+        principal: Principal = Depends(learning_principal),
+        csrf: str = Header(alias="X-CSRF-Token"),
+        idempotency_key: UUID = Header(alias="Idempotency-Key"),
+    ) -> Response:
+        require_csrf(request, principal, settings.csrf_key.get_secret_value())
+        submission_id = payload.submissionId
+        explanation = payload.explanation
+
+        async def action() -> tuple[int, object]:
+            post = await repository.create_post(
+                principal, problemId, submission_id, explanation
+            )
+            return status.HTTP_202_ACCEPTED, post
+
+        return await _idempotent(
+            database,
+            principal,
+            f"create-post:{problemId}",
+            idempotency_key,
+            payload,
+            action,
+        )
+
+    @router.get("/reports", response_model=ReportPageModel)
+    async def list_reports(
+        principal: Principal = Depends(learning_principal),
+        cursor: str | None = Query(default=None, max_length=512),
+        limit: int = Query(default=30, ge=1, le=100),
+    ) -> ReportPageModel:
+        del cursor  # Cursor pagination is added when report volume requires it.
+        return await repository.list_reports(principal, limit)
+
+    @router.post("/reports", response_model=ReportModel, status_code=201)
+    async def create_report(
+        request: Request,
+        payload: ReportCreateModel,
+        principal: Principal = Depends(learning_principal),
+        csrf: str = Header(alias="X-CSRF-Token"),
+        idempotency_key: UUID = Header(alias="Idempotency-Key"),
+    ) -> Response:
+        require_csrf(request, principal, settings.csrf_key.get_secret_value())
+
+        async def action() -> tuple[int, object]:
+            return status.HTTP_201_CREATED, await repository.create_report(
+                principal, payload
+            )
+
+        return await _idempotent(
+            database, principal, "create-report", idempotency_key, payload, action
+        )
+
+    @router.get("/jobs/{jobId}", response_model=JobModel)
+    async def get_job(
+        jobId: UlidPath,
+        principal: Principal = Depends(required_principal),
+    ) -> JobModel:
+        job = await repository.get_job(principal, jobId)
+        if job is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "JOB_NOT_FOUND")
+        return job
 
     @router.get("/policies", response_model=list[PolicyModel])
     async def list_policies(

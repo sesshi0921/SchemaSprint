@@ -2,9 +2,18 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from hashlib import sha256
 from typing import Annotated
-from uuid import uuid4
+from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict
 
@@ -26,9 +35,9 @@ from .http_security import (
     same_origin,
     security_headers,
 )
-from .learner_routes import register_learner_routes
+from .learner_routes import _idempotent, register_learner_routes
 from .problems import Locale, ProblemDetail, ProblemRepository
-from .security import SESSION_COOKIE, Principal, csrf_token
+from .security import SESSION_COOKIE, Principal, csrf_token, require_csrf
 
 
 class SessionGates(BaseModel):
@@ -210,6 +219,36 @@ def create_app(
             raise HTTPException(status.HTTP_403_FORBIDDEN, "LEARNING_ACCESS_REQUIRED")
         return principal
 
+    @app.get("/api/v1/auth/{provider}/start")
+    async def start_oauth(
+        provider: str,
+        return_to: str = Query(default="/", alias="returnTo", max_length=500),
+    ) -> Response:
+        if provider not in {"google", "github"}:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, "OAUTH_PROVIDER_NOT_SUPPORTED"
+            )
+        # Provider client credentials and exact redirect allowlists are not
+        # configured in the local MVP. Do not fabricate a provider URL or
+        # create an OAuth state that cannot be completed safely.
+        _ = return_to
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "OAUTH_NOT_CONFIGURED")
+
+    @app.get("/api/v1/auth/{provider}/callback")
+    async def finish_oauth(
+        provider: str,
+        code: str = Query(min_length=1, max_length=4096),
+        state: str = Query(min_length=32, max_length=512),
+    ) -> Response:
+        if provider not in {"google", "github"}:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, "OAUTH_PROVIDER_NOT_SUPPORTED"
+            )
+        # Never accept or log the authorization code without a configured
+        # provider adapter, state store, PKCE verifier, and issuer validation.
+        _ = (code, state)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "OAUTH_NOT_CONFIGURED")
+
     @app.get("/health/live", include_in_schema=False)
     async def live() -> dict[str, str]:
         return {"status": "live"}
@@ -233,6 +272,33 @@ def create_app(
                 mfaCurrent=principal.mfa_current,
             ),
         )
+
+    @app.post("/api/v1/session/logout", status_code=status.HTTP_204_NO_CONTENT)
+    async def logout(
+        request: Request,
+        principal: Annotated[Principal, Depends(required_principal)],
+        csrf: str = Header(alias="X-CSRF-Token"),
+        idempotency_key: UUID = Header(alias="Idempotency-Key"),  # noqa: B008
+    ) -> Response:
+        require_csrf(request, principal, resolved.csrf_key.get_secret_value())
+
+        async def action() -> tuple[int, object]:
+            async with database.privileged() as connection:
+                await connection.execute(
+                    """
+                    UPDATE private.sessions
+                    SET revoked_at=coalesce(revoked_at, now())
+                    WHERE id=%s AND user_id=%s
+                    """,
+                    (principal.session_id, principal.user_id),
+                )
+            return status.HTTP_204_NO_CONTENT, None
+
+        response = await _idempotent(
+            database, principal, "logout", idempotency_key, {}, action
+        )
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        return response
 
     @app.get("/api/v1/problems/today", response_model=ProblemDetail)
     async def today(
