@@ -55,6 +55,21 @@ npm run build
 - `docs/design/*/review.md` の未完了ゲート（実BFF/OAuth E2E、アクセシビリティ・モバイル実機、バックアップ・復旧、負荷・ペネトレーション、運用予算監視）を通過するまで本番公開しません。
 - 本リポジトリの環境ではDocker実行と本番デプロイを行っていません。
 
+### OAuthの登録
+
+Google/GitHubの開発者コンソールで、実際に配信するHTTPSのcallback URLを正確に登録し、次のサーバー専用Secretを設定します。未設定時は`OAUTH_NOT_CONFIGURED`を返し、成功を偽装しません。
+
+```env
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_REDIRECT_URI=https://<公開ホスト>/api/v1/auth/google/callback
+GITHUB_CLIENT_ID=...
+GITHUB_CLIENT_SECRET=...
+GITHUB_REDIRECT_URI=https://<公開ホスト>/api/v1/auth/github/callback
+```
+
+OAuthはPKCE、ワンタイムstate、暗号化済み検証子、HTTPS、allowlist済み既存provider identityを要求します。Supabase Authの新規ユーザー自動プロビジョニングとOIDC JWKS検証は本番リリース前ゲートです。
+
 ### Groq開発キーの登録
 
 1. [Groq Console](https://console.groq.com/)でアカウントを作成し、開発用Projectを作成する。
