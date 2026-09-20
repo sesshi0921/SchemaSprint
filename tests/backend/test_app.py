@@ -256,3 +256,36 @@ async def test_today_serializes_problem_detail_with_state_and_locale(
     assert body["submitted"] is True
     assert body["passed"] is False
     assert len(body["rubricSummary"]) == 1
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["google", "github"])
+async def test_oauth_never_claims_success_without_provider_adapter(
+    provider: str,
+) -> None:
+    app = create_app(make_settings(), FakeDatabase(None))
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="https://schemasprint.test",
+        ) as client,
+    ):
+        response = await client.get(f"/api/v1/auth/{provider}/start")
+    assert response.status_code == 503
+    assert response.json()["code"] == "OAUTH_NOT_CONFIGURED"
+    assert "Location" not in response.headers
+
+
+@pytest.mark.asyncio
+async def test_unknown_oauth_provider_is_rejected() -> None:
+    app = create_app(make_settings(), FakeDatabase(None))
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="https://schemasprint.test",
+        ) as client,
+    ):
+        response = await client.get("/api/v1/auth/not-a-provider/start")
+    assert response.status_code == 404
+    assert response.json()["code"] == "OAUTH_PROVIDER_NOT_SUPPORTED"
