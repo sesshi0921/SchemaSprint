@@ -104,3 +104,14 @@ JEV_BASE_URL=https://api.typesafe.ai
 JEV_API_KEY=取得したキー
 JEV_MODEL=jev-latest
 ```
+
+### Cloudflare preview deployment
+
+The static PWA preview is published at
+`https://800db4b0.schemasprint-web.pages.dev`. The staging Worker shell is
+published at `https://schemasprint-gateway-staging.seshimaru-dev.workers.dev`.
+The Worker currently returns `PAID_RUNTIME_DISABLED` because the MVP keeps
+Cloudflare Containers disabled; the Pages preview therefore truthfully shows
+the API-unavailable state until the protected database/secrets and paid-runtime
+release gates are approved. No production route or live container rollout was
+enabled.
