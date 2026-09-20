@@ -64,6 +64,8 @@ Provision these exact names as Cloudflare Worker secrets through the protected d
 - `SESSION_PEPPER`;
 - `CSRF_KEY`;
 - `ALLOWED_ORIGIN`;
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`;
+- `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_REDIRECT_URI`;
 - optional `JEV_MODE`, `JEV_BASE_URL`, and `JEV_API_KEY` when external Jev is approved.
 - optional `JEV_MODEL`, `JEV_TIMEOUT_SECONDS`, and `JEV_MAX_RETRIES` when external Jev is approved;
 - optional `LLM_MODE`, `GROQ_API_URL`, `GROQ_API_KEY`, `GROQ_MODEL`, and `GROQ_TIMEOUT_SECONDS` when Groq feedback generation is approved. The Groq key is server-only.
