@@ -17,6 +17,7 @@ from fastapi import (
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict
 
+from .admin_routes import register_admin_routes
 from .config import Settings, get_settings
 from .database import Database
 from .errors import (
@@ -319,6 +320,7 @@ def create_app(
         required_principal,
         learning_principal,
     )
+    register_admin_routes(app, database, resolved, required_principal)
 
     @app.exception_handler(Exception)
     async def unhandled(request: Request, _: Exception):  # type: ignore[no-untyped-def]
