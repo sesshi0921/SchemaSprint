@@ -35,6 +35,8 @@ uv run ruff format --check backend tests
 uv run mypy backend tests
 uv run sqlfluff lint db
 uv run python -m openapi_spec_validator openapi.yaml
+uv export --locked --format requirements-txt --no-hashes > /tmp/schemasprint-requirements.txt
+uvx pip-audit --requirement /tmp/schemasprint-requirements.txt
 uv run pytest tests -q
 
 # Frontend
