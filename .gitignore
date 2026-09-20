@@ -11,6 +11,7 @@ target/
 dist/
 coverage/
 .playwright/
+.sec_keys
 test-results/
 .terraform/
 *.tfstate*
