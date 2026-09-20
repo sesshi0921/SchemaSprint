@@ -233,6 +233,108 @@ def test_server_draft_requires_current_premium(db: psycopg.Connection[Any]) -> N
     assert db.execute("SELECT count(*) FROM public.workspaces").fetchone() == (1,)
 
 
+def test_server_draft_read_requires_current_premium(
+    db: psycopg.Connection[Any],
+) -> None:
+    seed_users(db)
+    seed_problem(db)
+    grant_learning_access(db)
+    db.execute(
+        "INSERT INTO public.entitlements(id, user_id, kind, source, valid_from) VALUES (%s, %s, 'premium', 'admin', now())",  # noqa: E501
+        ("01ARZ3NDEKTSV4RRFFQ69G5FB2", USER_A),
+    )
+    db.execute("SET LOCAL ROLE authenticated")
+    db.execute(
+        "SELECT set_config('request.jwt.claim.sub', %s, true)",
+        ("11111111-1111-1111-1111-111111111111",),
+    )
+    db.execute(
+        "INSERT INTO public.workspaces(user_id, problem_id, canonical_schema) VALUES (%s, %s, '{}'::jsonb)",  # noqa: E501
+        (USER_A, PROBLEM),
+    )
+    assert db.execute("SELECT problem_id FROM public.workspaces").fetchall() == [
+        (PROBLEM,)
+    ]
+    db.execute("RESET ROLE")
+    db.execute(
+        "UPDATE public.entitlements SET revoked_at = now() WHERE user_id = %s",
+        (USER_A,),
+    )
+    db.execute("SET LOCAL ROLE authenticated")
+    assert db.execute("SELECT count(*) FROM public.workspaces").fetchone() == (0,)
+
+
+def test_workspace_update_boundary_protects_identity_and_timestamp(
+    db: psycopg.Connection[Any],
+) -> None:
+    seed_users(db)
+    seed_problem(db)
+    grant_learning_access(db)
+    db.execute(
+        "INSERT INTO public.entitlements(id, user_id, kind, source, valid_from) VALUES (%s, %s, 'premium', 'admin', now())",  # noqa: E501
+        ("01ARZ3NDEKTSV4RRFFQ69G5FB3", USER_A),
+    )
+    db.execute("SET LOCAL ROLE authenticated")
+    db.execute(
+        "SELECT set_config('request.jwt.claim.sub', %s, true)",
+        ("11111111-1111-1111-1111-111111111111",),
+    )
+    db.execute(
+        "INSERT INTO public.workspaces(user_id, problem_id, canonical_schema) VALUES (%s, %s, '{}'::jsonb)",  # noqa: E501
+        (USER_A, PROBLEM),
+    )
+    before = db.execute("SELECT revision, updated_at FROM public.workspaces").fetchone()
+    assert before is not None
+    db.execute(
+        "UPDATE public.workspaces SET canonical_schema = '{\"tables\": []}'::jsonb, revision = revision + 1 WHERE user_id = %s AND problem_id = %s",  # noqa: E501
+        (USER_A, PROBLEM),
+    )
+    after = db.execute("SELECT revision, updated_at FROM public.workspaces").fetchone()
+    assert after is not None
+    assert after[0] == before[0] + 1
+    assert after[1] > before[1]
+    for column in ("canonical_schema", "editor_sources", "layout", "revision"):
+        assert db.execute(
+            "SELECT has_column_privilege('authenticated', 'public.workspaces', %s, 'UPDATE')",  # noqa: E501
+            (column,),
+        ).fetchone() == (True,)
+    for column in ("user_id", "problem_id", "updated_at"):
+        assert db.execute(
+            "SELECT has_column_privilege('authenticated', 'public.workspaces', %s, 'UPDATE')",  # noqa: E501
+            (column,),
+        ).fetchone() == (False,)
+        with pytest.raises(psycopg.errors.InsufficientPrivilege), db.transaction():
+            db.execute(
+                f"UPDATE public.workspaces SET {column} = %s WHERE user_id = %s AND problem_id = %s",  # noqa: E501
+                (
+                    USER_B
+                    if column == "user_id"
+                    else PROBLEM
+                    if column == "problem_id"
+                    else before[1],
+                    USER_A,
+                    PROBLEM,
+                ),
+            )
+    db.execute("RESET ROLE")
+    db.execute("SET LOCAL ROLE service_role")
+    with pytest.raises(psycopg.errors.RaiseException), db.transaction():
+        db.execute(
+            "UPDATE public.workspaces SET user_id = %s, revision = revision + 1 WHERE user_id = %s AND problem_id = %s",  # noqa: E501
+            (USER_B, USER_A, PROBLEM),
+        )
+    with pytest.raises(psycopg.errors.RaiseException), db.transaction():
+        db.execute(
+            "UPDATE public.workspaces SET problem_id = %s, revision = revision + 1 WHERE user_id = %s AND problem_id = %s",  # noqa: E501
+            (USER_B, USER_A, PROBLEM),
+        )
+    with pytest.raises(psycopg.errors.RaiseException), db.transaction():
+        db.execute(
+            "UPDATE public.workspaces SET updated_at = now() + interval '1 day', revision = revision + 1 WHERE user_id = %s AND problem_id = %s",  # noqa: E501
+            (USER_A, PROBLEM),
+        )
+
+
 def test_frozen_content_and_submissions_are_immutable(
     db: psycopg.Connection[Any],
 ) -> None:
@@ -347,7 +449,7 @@ def test_learning_content_requires_allowlist_age_and_current_policy(
     db.execute("RESET ROLE")
     policy_id = "01ARZ3NDEKTSV4RRFFQ69G5FB6"
     db.execute(
-        "INSERT INTO public.policy_versions(id, kind, version, content_digest, required_from) VALUES (%s, 'terms', 1, %s, now())",  # noqa: E501
+        "INSERT INTO public.policy_versions(id, kind, version, content_digest, content_en, required_from) VALUES (%s, 'terms', 1, %s, 'Terms v1', now())",  # noqa: E501
         (policy_id, DIGEST),
     )
     db.execute("SET LOCAL ROLE authenticated")
@@ -642,7 +744,7 @@ def test_only_latest_effective_policy_per_kind_is_required(
     first = "01ARZ3NDEKTSV4RRFFQ69G5FBJ"
     latest = "01ARZ3NDEKTSV4RRFFQ69G5FBK"
     db.execute(
-        "INSERT INTO public.policy_versions(id, kind, version, content_digest, required_from) VALUES (%s, 'terms', 1, %s, now() - interval '2 days'), (%s, 'terms', 2, %s, now() - interval '1 day')",  # noqa: E501
+        "INSERT INTO public.policy_versions(id, kind, version, content_digest, content_en, required_from) VALUES (%s, 'terms', 1, %s, 'Terms v1', now() - interval '2 days'), (%s, 'terms', 2, %s, 'Terms v2', now() - interval '1 day')",  # noqa: E501
         (first, DIGEST, latest, "b" * 64),
     )
     db.execute(

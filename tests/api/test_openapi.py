@@ -65,6 +65,31 @@ def test_schema_payload_bounds_match_reviewed_limits() -> None:
     assert schemas["SchemaTable"]["properties"]["columns"]["maxItems"] == 200
 
 
+def test_session_gates_nullability_and_problem_detail_are_explicit() -> None:
+    schemas = load_spec()["components"]["schemas"]
+    session = schemas["SessionState"]
+    assert "gates" in session["required"]
+    gates = session["properties"]["gates"]["anyOf"]
+    assert {item.get("type") for item in gates} >= {"object", "null"}
+
+    detail = schemas["ProblemDetail"]
+    assert "allOf" not in detail
+    assert detail["additionalProperties"] is False
+    assert {
+        "passed",
+        "submitted",
+        "problemVersionId",
+        "rubricSummary",
+        "requestedLocale",
+    } <= set(detail["required"])
+
+
+def test_today_returns_explicit_problem_detail_contract() -> None:
+    operation = load_spec()["paths"]["/v1/problems/today"]["get"]
+    schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
+    assert schema == {"$ref": "#/components/schemas/ProblemDetail"}
+
+
 def test_async_jobs_are_pollable() -> None:
     paths = load_spec()["paths"]
     assert "get" in paths["/v1/jobs/{jobId}"]

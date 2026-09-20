@@ -41,6 +41,7 @@ CREATE TABLE public.policy_versions (
     kind text NOT NULL CHECK (kind IN ('terms', 'privacy', 'community')),
     version integer NOT NULL CHECK (version > 0),
     content_digest text NOT NULL CHECK (content_digest ~ '^[0-9a-f]{64}$'),
+    content_en text NOT NULL CHECK (content_en <> ''),
     required_from timestamptz NOT NULL,
     UNIQUE (kind, version)
 );
@@ -315,6 +316,7 @@ CREATE TABLE private.sessions (
     token_hash text NOT NULL UNIQUE,
     expires_at timestamptz NOT NULL,
     revoked_at timestamptz,
+    mfa_authenticated_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE private.oauth_attempts (
@@ -373,6 +375,7 @@ CREATE TABLE private.billing_events (
 );
 CREATE TABLE private.jobs (
     id public.ulid PRIMARY KEY,
+    owner_user_id public.ulid REFERENCES public.users (id) ON DELETE CASCADE,
     kind text NOT NULL,
     state public.job_state NOT NULL DEFAULT 'pending',
     payload jsonb NOT NULL CHECK (jsonb_typeof(payload) = 'object'),
@@ -433,6 +436,7 @@ AS $$
    SELECT 1 FROM public.users u
    JOIN public.age_declarations a ON a.user_id = u.id AND a.is_at_least_16
    JOIN public.provider_identities pi ON pi.user_id = u.id
+      AND pi.verified_at IS NOT NULL
    JOIN private.identity_allowlist al ON al.issuer = pi.issuer
       AND al.subject = pi.subject AND al.disabled_at IS NULL
    WHERE u.auth_user_id = auth.uid()
@@ -520,13 +524,23 @@ CREATE TRIGGER result_immutable BEFORE UPDATE OR DELETE ON public.submission_res
 CREATE TRIGGER requirement_result_immutable BEFORE UPDATE OR DELETE ON public.requirement_results FOR EACH ROW EXECUTE FUNCTION private.reject_mutation();
 CREATE TRIGGER post_immutable BEFORE UPDATE OR DELETE ON public.posts FOR EACH ROW EXECUTE FUNCTION private.protect_post();
 
-CREATE OR REPLACE FUNCTION private.increment_workspace_revision() RETURNS trigger
+CREATE OR REPLACE FUNCTION private.protect_workspace_update() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
- IF NEW.revision <> OLD.revision + 1 THEN RAISE EXCEPTION 'workspace revision must increment by one'; END IF;
+ IF NEW.user_id IS DISTINCT FROM OLD.user_id OR NEW.problem_id IS DISTINCT FROM OLD.problem_id THEN
+   RAISE EXCEPTION 'workspace identity is immutable';
+ END IF;
+ IF NEW.updated_at IS DISTINCT FROM OLD.updated_at THEN
+   RAISE EXCEPTION 'workspace updated_at is server managed';
+ END IF;
+ IF NEW.revision <> OLD.revision + 1 THEN
+   RAISE EXCEPTION 'workspace revision must increment by one';
+ END IF;
+ NEW.updated_at := clock_timestamp();
  RETURN NEW;
 END $$;
-CREATE TRIGGER workspace_revision BEFORE UPDATE ON public.workspaces FOR EACH ROW EXECUTE FUNCTION private.increment_workspace_revision();
+CREATE TRIGGER workspace_update_guard BEFORE UPDATE ON public.workspaces
+FOR EACH ROW EXECUTE FUNCTION private.protect_workspace_update();
 
 CREATE OR REPLACE FUNCTION private.validate_submission() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
@@ -664,7 +678,7 @@ CREATE POLICY entitlements_owner_read ON public.entitlements FOR SELECT TO authe
     user_id = public.current_user_id() AND public.can_learn()
 );
 CREATE POLICY workspaces_owner_read ON public.workspaces FOR SELECT TO authenticated USING (
-    user_id = public.current_user_id() AND public.can_learn()
+    user_id = public.current_user_id() AND public.has_active_premium() AND public.can_learn()
 );
 CREATE POLICY reports_owner_read ON public.reports FOR SELECT TO authenticated USING (
     reporter_user_id = public.current_user_id() AND public.can_learn()
@@ -676,7 +690,10 @@ CREATE POLICY posts_member_read ON public.posts FOR SELECT TO authenticated USIN
     moderation_state = 'approved' AND public.can_learn()
 );
 
-GRANT SELECT, INSERT, UPDATE ON public.workspaces TO authenticated;
+GRANT INSERT (user_id, problem_id, canonical_schema, editor_sources, layout)
+ON public.workspaces TO authenticated;
+GRANT UPDATE (canonical_schema, editor_sources, layout, revision)
+ON public.workspaces TO authenticated;
 CREATE POLICY workspaces_premium_insert ON public.workspaces FOR INSERT TO authenticated WITH CHECK (
     user_id = public.current_user_id() AND public.has_active_premium() AND public.can_learn()
 );

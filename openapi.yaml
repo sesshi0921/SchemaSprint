@@ -642,20 +642,23 @@ components:
     SessionState:
       type: object
       additionalProperties: false
-      required: [authenticated, csrfToken]
+      required: [authenticated, csrfToken, gates]
       properties:
         authenticated: {type: boolean}
         csrfToken: {type: [string, 'null']}
         profile: {anyOf: [{$ref: '#/components/schemas/Profile'}, {type: 'null'}]}
         gates:
-          type: object
-          additionalProperties: false
-          properties:
-            allowlisted: {type: boolean}
-            identityVerified: {type: boolean}
-            ageDeclared: {type: boolean}
-            policiesCurrent: {type: boolean}
-            mfaCurrent: {type: boolean}
+          anyOf:
+            - type: object
+              additionalProperties: false
+              required: [allowlisted, identityVerified, ageDeclared, policiesCurrent, mfaCurrent]
+              properties:
+                allowlisted: {type: boolean}
+                identityVerified: {type: boolean}
+                ageDeclared: {type: boolean}
+                policiesCurrent: {type: boolean}
+                mfaCurrent: {type: boolean}
+            - type: 'null'
     Profile:
       type: object
       additionalProperties: false
@@ -704,28 +707,40 @@ components:
         submitted: {type: boolean}
         translationStatus: {type: string, enum: [source, translated, pending, unavailable]}
     ProblemDetail:
-      allOf:
-        - {$ref: '#/components/schemas/ProblemSummary'}
-        - type: object
-          required: [problemVersionId, statement, officialAnswer, explanation, rubricSummary]
-          properties:
-            problemVersionId: {$ref: '#/components/schemas/Ulid'}
-            statement: {type: string}
-            officialAnswer: {$ref: '#/components/schemas/CanonicalSchema'}
-            explanation: {type: string}
-            sourceLanguage: {type: string, const: en}
-            requestedLocale: {$ref: '#/components/schemas/Locale'}
-            rubricSummary:
-              type: array
-              items:
-                type: object
-                required: [id, description, weight, critical, implicit]
-                properties:
-                  id: {$ref: '#/components/schemas/Ulid'}
-                  description: {type: string}
-                  weight: {type: integer, minimum: 1, maximum: 1000000}
-                  critical: {type: boolean}
-                  implicit: {type: boolean}
+      type: object
+      additionalProperties: false
+      required: [id, version, title, difficulty, genre, inputFormat, tags, publicationDate, passed, submitted, translationStatus, problemVersionId, statement, officialAnswer, explanation, sourceLanguage, requestedLocale, rubricSummary]
+      properties:
+        id: {$ref: '#/components/schemas/Ulid'}
+        version: {type: integer, minimum: 1}
+        title: {type: string}
+        difficulty: {$ref: '#/components/schemas/Difficulty'}
+        genre: {type: string}
+        inputFormat: {$ref: '#/components/schemas/InputFormat'}
+        tags: {type: array, items: {type: string}}
+        publicationDate: {type: string, format: date}
+        passed: {type: boolean}
+        submitted: {type: boolean}
+        translationStatus: {type: string, enum: [source, translated, pending, unavailable]}
+        problemVersionId: {$ref: '#/components/schemas/Ulid'}
+        statement: {type: string}
+        officialAnswer: {$ref: '#/components/schemas/CanonicalSchema'}
+        explanation: {type: string}
+        sourceLanguage: {type: string, const: en}
+        requestedLocale: {$ref: '#/components/schemas/Locale'}
+        rubricSummary:
+          type: array
+          maxItems: 2000
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, description, weight, critical, implicit]
+            properties:
+              id: {$ref: '#/components/schemas/Ulid'}
+              description: {type: string}
+              weight: {type: integer, minimum: 1, maximum: 1000000}
+              critical: {type: boolean}
+              implicit: {type: boolean}
     ProblemPage:
       type: object
       required: [items]
