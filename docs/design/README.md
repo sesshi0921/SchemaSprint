@@ -4,6 +4,7 @@ Bilingual source requirements: English first, followed by the Japanese translati
 
 ## Documents
 
+- [Implementation plan and release boundary](01-requirements/implementation-plan.md)
 - [Product requirements](product/requirements.md)
 - [Learning, problems, and assessment](learning/problems-and-assessment.md)
 - [Editor and community experience](experience/editor-and-community.md)
@@ -40,6 +41,7 @@ Requirements are derived from the product conversation, not external market clai
 
 ## 文書
 
+- [実装計画とリリース境界](01-requirements/implementation-plan.md)
 - [製品要件](product/requirements.md)
 - [学習、課題、評価](learning/problems-and-assessment.md)
 - [エディターとコミュニティ体験](experience/editor-and-community.md)
