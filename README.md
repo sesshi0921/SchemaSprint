@@ -53,3 +53,12 @@ npm run build
 - Google/GitHub OAuth、Cloudflare Worker/R2、Supabase Auth/PostgreSQL、メール通知、広告、決済は本番のシークレット登録とE2E検証が必要です。
 - `docs/design/*/review.md` の未完了ゲート（実BFF/OAuth E2E、アクセシビリティ・モバイル実機、バックアップ・復旧、負荷・ペネトレーション、運用予算監視）を通過するまで本番公開しません。
 - 本リポジトリの環境ではDocker実行と本番デプロイを行っていません。
+
+### Groq開発キーの登録
+
+1. [Groq Console](https://console.groq.com/)でアカウントを作成し、開発用Projectを作成する。
+2. **API Keys → Create API Key** でキーを発行し、パスワード管理ツールへ一度だけ保存する。
+3. `SCHEMASPRINT_GROQ_API_KEY`として、バックエンドまたはWorkerのSecretへ登録する。`.env`、Git、ブラウザ環境変数、ログには書かない。
+4. `SCHEMASPRINT_LLM_MODE=groq`を設定し、サーバーを再起動する。キー未設定時は成功表示せず`LLM_UNAVAILABLE`となる。
+
+Groqのキー発行・API形式・制限は[公式ドキュメント](https://console.groq.com/docs/openai)を確認する。実キーの登録と本番利用は、データ処理条件・予算・レート上限を確認してから行う。
