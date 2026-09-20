@@ -416,10 +416,10 @@ def register_learner_routes(
         idempotency_key: UUID = Header(alias="Idempotency-Key"),
     ) -> Response:
         require_csrf(request, principal, settings.csrf_key.get_secret_value())
-        # A provider adapter is intentionally not shipped as a fake.  Until a
-        # real Jev endpoint is configured, report a deterministic unavailable
-        # response rather than creating a job that can never complete.
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "JEV_UNAVAILABLE")
+        # Feedback is an LLM operation, independent from Jev assessment. Do
+        # not enqueue a job until a real server-side provider is configured;
+        # a pending job without a worker would be a false success.
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "LLM_UNAVAILABLE")
 
     @router.post("/feedback-rewards", response_model=dict, status_code=201)
     async def start_feedback_reward(
