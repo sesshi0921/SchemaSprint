@@ -26,6 +26,7 @@ from .http_security import (
     same_origin,
     security_headers,
 )
+from .learner_routes import register_learner_routes
 from .problems import Locale, ProblemDetail, ProblemRepository
 from .security import SESSION_COOKIE, Principal, csrf_token
 
@@ -242,6 +243,16 @@ def create_app(
         if row is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "TODAY_PROBLEM_NOT_FOUND")
         return row
+
+    # Register after the reserved ``/problems/today`` route so the dynamic
+    # problem-id route cannot shadow the daily endpoint.
+    register_learner_routes(
+        app,
+        database,
+        resolved,
+        required_principal,
+        learning_principal,
+    )
 
     @app.exception_handler(Exception)
     async def unhandled(request: Request, _: Exception):  # type: ignore[no-untyped-def]

@@ -211,7 +211,11 @@ paths:
     delete:
       tags: [Workspace]
       operationId: deleteServerDraft
-      parameters: [{$ref: '#/components/parameters/ProblemId'}, {$ref: '#/components/parameters/CsrfToken'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      parameters:
+        - {$ref: '#/components/parameters/ProblemId'}
+        - {$ref: '#/components/parameters/CsrfToken'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+        - {name: If-Match, in: header, required: true, schema: {type: string, pattern: '^"[1-9][0-9]*"$'}}
       responses:
         '204': {description: Server draft deleted.}
         default: {$ref: '#/components/responses/Error'}

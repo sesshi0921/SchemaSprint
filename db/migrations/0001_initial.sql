@@ -155,7 +155,12 @@ CREATE TABLE public.submissions (
     idempotency_key uuid NOT NULL,
     request_digest text NOT NULL CHECK (request_digest ~ '^[0-9a-f]{64}$'),
     canonical_schema jsonb NOT NULL CHECK (jsonb_typeof(canonical_schema) = 'object'),
+    editor_sources jsonb NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(editor_sources) = 'object'),
+    problem_snapshot jsonb NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(problem_snapshot) = 'object'),
+    rubric_snapshot jsonb NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(rubric_snapshot) = 'array'),
+    static_analysis_snapshot jsonb NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(static_analysis_snapshot) = 'object'),
     assessment_snapshot jsonb NOT NULL CHECK (jsonb_typeof(assessment_snapshot) = 'object'),
+    failure_code text,
     engine_version text NOT NULL CHECK (engine_version <> ''),
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (user_id, idempotency_key), UNIQUE (id, user_id),
@@ -173,6 +178,10 @@ CREATE TABLE public.submission_results (
     passed boolean NOT NULL,
     has_contradiction boolean NOT NULL,
     confidence numeric(5, 2) NOT NULL CHECK (confidence BETWEEN 0 AND 100),
+    numerator bigint NOT NULL DEFAULT 0 CHECK (numerator >= 0),
+    denominator bigint NOT NULL DEFAULT 1 CHECK (denominator > 0),
+    display_tenths integer NOT NULL DEFAULT 0 CHECK (display_tenths BETWEEN 0 AND 1000),
+    exact_full boolean NOT NULL DEFAULT FALSE,
     jev_version text NOT NULL CHECK (jev_version <> ''),
     static_output jsonb NOT NULL CHECK (jsonb_typeof(static_output) = 'object'),
     jev_output jsonb NOT NULL CHECK (jsonb_typeof(jev_output) = 'object'),
@@ -639,13 +648,13 @@ CREATE POLICY rubric_member_read ON public.rubric_items FOR SELECT TO authentica
     ) AND public.can_learn()
 );
 CREATE POLICY publication_member_read ON public.publication_calendar FOR SELECT TO authenticated USING (
-    public.can_learn()
+    public.can_learn() AND published_at <= now()
 );
 CREATE POLICY policy_versions_member_read ON public.policy_versions FOR SELECT TO authenticated USING (
     public.current_user_id() IS NOT NULL
 );
 CREATE POLICY notice_versions_member_read ON public.notice_versions FOR SELECT TO authenticated USING (
-    state = 'published' AND public.can_learn()
+    state = 'published' AND published_at <= now() AND public.can_learn()
 );
 GRANT SELECT ON public.submissions,
 public.submission_results,
@@ -655,7 +664,10 @@ public.posts,
 public.notice_reads,
 public.reports,
 public.workspaces,
-public.entitlements TO authenticated;
+public.entitlements,
+public.role_grants,
+public.policy_acknowledgements,
+public.translation_cache TO authenticated;
 CREATE POLICY submissions_owner_read ON public.submissions FOR SELECT TO authenticated USING (
     user_id = public.current_user_id() AND public.can_learn()
 );
@@ -677,8 +689,23 @@ CREATE POLICY feedback_owner_read ON public.feedback_versions FOR SELECT TO auth
 CREATE POLICY entitlements_owner_read ON public.entitlements FOR SELECT TO authenticated USING (
     user_id = public.current_user_id() AND public.can_learn()
 );
+CREATE POLICY role_grants_owner_read ON public.role_grants FOR SELECT TO authenticated USING (
+    user_id = public.current_user_id()
+);
+CREATE POLICY policy_acknowledgements_owner_read
+ON public.policy_acknowledgements FOR SELECT TO authenticated USING (
+    user_id = public.current_user_id()
+);
+CREATE POLICY translation_cache_scoped_read
+ON public.translation_cache FOR SELECT TO authenticated USING (
+    public.can_learn()
+    AND (
+        owner_user_id = public.current_user_id()
+        OR (owner_user_id IS NULL AND content_kind <> 'feedback')
+    )
+);
 CREATE POLICY workspaces_owner_read ON public.workspaces FOR SELECT TO authenticated USING (
-    user_id = public.current_user_id() AND public.has_active_premium() AND public.can_learn()
+    user_id = public.current_user_id() AND public.can_learn()
 );
 CREATE POLICY reports_owner_read ON public.reports FOR SELECT TO authenticated USING (
     reporter_user_id = public.current_user_id() AND public.can_learn()
@@ -694,12 +721,16 @@ GRANT INSERT (user_id, problem_id, canonical_schema, editor_sources, layout)
 ON public.workspaces TO authenticated;
 GRANT UPDATE (canonical_schema, editor_sources, layout, revision)
 ON public.workspaces TO authenticated;
+GRANT DELETE ON public.workspaces TO authenticated;
 CREATE POLICY workspaces_premium_insert ON public.workspaces FOR INSERT TO authenticated WITH CHECK (
     user_id = public.current_user_id() AND public.has_active_premium() AND public.can_learn()
 );
 CREATE POLICY workspaces_premium_update ON public.workspaces FOR UPDATE TO authenticated USING (
     user_id = public.current_user_id() AND public.has_active_premium()
 ) WITH CHECK (
+    user_id = public.current_user_id() AND public.has_active_premium() AND public.can_learn()
+);
+CREATE POLICY workspaces_premium_delete ON public.workspaces FOR DELETE TO authenticated USING (
     user_id = public.current_user_id() AND public.has_active_premium() AND public.can_learn()
 );
 GRANT SELECT, INSERT ON public.notice_reads TO authenticated;

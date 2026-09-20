@@ -233,7 +233,7 @@ def test_server_draft_requires_current_premium(db: psycopg.Connection[Any]) -> N
     assert db.execute("SELECT count(*) FROM public.workspaces").fetchone() == (1,)
 
 
-def test_server_draft_read_requires_current_premium(
+def test_server_draft_read_survives_premium_expiry_but_writes_remain_gated(
     db: psycopg.Connection[Any],
 ) -> None:
     seed_users(db)
@@ -261,7 +261,28 @@ def test_server_draft_read_requires_current_premium(
         (USER_A,),
     )
     db.execute("SET LOCAL ROLE authenticated")
-    assert db.execute("SELECT count(*) FROM public.workspaces").fetchone() == (0,)
+    assert db.execute("SELECT count(*) FROM public.workspaces").fetchone() == (1,)
+    assert (
+        db.execute(
+            """
+            UPDATE public.workspaces
+            SET canonical_schema = '{"tables": []}'::jsonb,
+                revision = revision + 1
+            WHERE user_id = %s AND problem_id = %s
+            RETURNING problem_id
+            """,
+            (USER_A, PROBLEM),
+        ).fetchone()
+        is None
+    )
+    with pytest.raises(psycopg.errors.InsufficientPrivilege), db.transaction():
+        db.execute(
+            """
+            INSERT INTO public.workspaces(user_id, problem_id, canonical_schema)
+            VALUES (%s, %s, '{}'::jsonb)
+            """,
+            (USER_A, "01ARZ3NDEKTSV4RRFFQ69G5FB0"),
+        )
 
 
 def test_workspace_update_boundary_protects_identity_and_timestamp(
@@ -602,6 +623,34 @@ def test_rls_isolates_private_learning_records_between_eligible_users(
         assert db.execute(f"SELECT count(*) FROM public.{table}").fetchone() == (0,)
 
 
+def test_feedback_translation_cache_never_falls_back_to_shared_rows(
+    db: psycopg.Connection[Any],
+) -> None:
+    seed_users(db)
+    grant_learning_access(db)
+    grant_user_b_learning_access(db)
+    seed_problem(db)
+    seed_submission(db)
+    db.execute(
+        """
+        INSERT INTO public.translation_cache
+          (content_kind, content_id, content_version, locale, owner_user_id,
+           source_digest, translated_text)
+        VALUES ('feedback', %s, 1, 'ja', NULL, %s, 'shared-leak'),
+               ('feedback', %s, 1, 'ja', %s, %s, 'private-a')
+        """,
+        (SUBMISSION, DIGEST, SUBMISSION, USER_A, DIGEST),
+    )
+    db.execute("SET LOCAL ROLE authenticated")
+    db.execute(
+        "SELECT set_config('request.jwt.claim.sub', %s, true)",
+        ("22222222-2222-2222-2222-222222222222",),
+    )
+    assert db.execute("SELECT count(*) FROM public.translation_cache").fetchone() == (
+        0,
+    )
+
+
 def test_authenticated_role_cannot_write_authority_tables(
     db: psycopg.Connection[Any],
 ) -> None:
@@ -655,6 +704,34 @@ def test_publication_requires_exact_0400_jst_boundary(
                     + interval '4 hours 1 minute')""",
             (PROBLEM, VERSION),
         )
+
+
+def test_future_publications_and_notices_are_hidden_by_rls(
+    db: psycopg.Connection[Any],
+) -> None:
+    seed_users(db)
+    seed_problem(db)
+    grant_learning_access(db)
+    publish_problem(db)
+    notice = "01ARZ3NDEKTSV4RRFFQ69G5FBS"
+    notice_version = "01ARZ3NDEKTSV4RRFFQ69G5FBT"
+    db.execute("INSERT INTO public.notices(id) VALUES (%s)", (notice,))
+    db.execute(
+        """
+        INSERT INTO public.notice_versions
+          (id, notice_id, version, title_en, body_en, target_digest, state,
+           published_at)
+        VALUES (%s, %s, 1, 'future', 'future', %s, 'published',
+                now() + interval '1 day')
+        """,
+        (notice_version, notice, DIGEST),
+    )
+    db.execute("SET LOCAL ROLE authenticated")
+    db.execute(
+        "SELECT set_config('request.jwt.claim.sub', %s, true)",
+        ("11111111-1111-1111-1111-111111111111",),
+    )
+    assert db.execute("SELECT count(*) FROM public.notice_versions").fetchone() == (0,)
 
 
 def test_dashboard_query_has_usable_indexes(db: psycopg.Connection[Any]) -> None:
