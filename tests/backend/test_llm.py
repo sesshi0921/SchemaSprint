@@ -116,6 +116,28 @@ async def test_groq_rejects_provider_error_and_bounds_input() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+@pytest.mark.parametrize("model", ["", "x" * 129, "other-model"])
+async def test_groq_rejects_unexpected_response_model(model: str) -> None:
+    respx.post("https://api.groq.test/openai/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={"model": model, "choices": [{"message": {"content": "ok"}}]},
+        )
+    )
+    settings = make_settings(
+        groq_api_url="https://api.groq.test/openai/v1",
+        groq_api_key=SecretStr("server-secret"),
+        groq_model="test-model",
+        llm_mode=LLMMode.GROQ,
+    )
+    async with httpx.AsyncClient() as http:
+        client = GroqClient.from_settings(settings, http_client=http)
+        with pytest.raises(LLMProviderError, match="GROQ_"):
+            await client.complete([ChatMessage("user", "hello")])
+
+
+@pytest.mark.asyncio
+@respx.mock
 @pytest.mark.parametrize(
     ("status_code", "error_type"),
     [(429, LLMRateLimitError), (503, LLMUpstreamError)],

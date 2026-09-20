@@ -17,6 +17,8 @@ def test_feedback_output_accepts_only_known_rubric_ids() -> None:
         "not json",
         '{"contentEn":"ok","unexpected":true}',
         '{"contentEn":"ok","mentionedRequirementIds":["unknown"]}',
+        '{"contentEn":"ok","mentionedRequirementIds":["r1","r1"]}',
+        '{"contentEn":"bad\\u0000text","mentionedRequirementIds":[]}',
     ],
 )
 def test_feedback_output_rejects_malformed_or_unknown_content(raw: str) -> None:

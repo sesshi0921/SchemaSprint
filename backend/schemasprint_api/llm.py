@@ -217,6 +217,10 @@ class GroqClient:
             raise LLMUnavailableError("GROQ_INVALID_RESPONSE") from error
         if not isinstance(content, str) or not content.strip():
             raise LLMUnavailableError("GROQ_EMPTY_RESPONSE")
-        if not isinstance(model, str) or len(content) > MAX_OUTPUT_CHARACTERS:
+        if not isinstance(model, str) or not 1 <= len(model) <= 128:
+            raise LLMProviderError("GROQ_INVALID_RESPONSE")
+        if model != self._model:
+            raise LLMProviderError("GROQ_MODEL_MISMATCH")
+        if len(content) > MAX_OUTPUT_CHARACTERS:
             raise LLMProviderError("GROQ_OUTPUT_TOO_LARGE")
         return ChatCompletion(content, model, request_id)

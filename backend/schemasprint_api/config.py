@@ -48,7 +48,9 @@ class Settings(BaseSettings):
     csrf_key: SecretStr
     allowed_origin: AnyHttpUrl
     jev_mode: JevMode = JevMode.UNAVAILABLE
-    jev_base_url: AnyHttpUrl | None = None
+    # TypeSafe's official System One host; JevClient appends /v1/systemone.
+    # Keep it configurable for approved gateways or test endpoints.
+    jev_base_url: AnyHttpUrl | None = AnyHttpUrl("https://api.typesafe.ai")
     jev_api_key: SecretStr | None = None
     llm_mode: LLMMode = LLMMode.UNAVAILABLE
     jev_model: str = "jev-latest"
