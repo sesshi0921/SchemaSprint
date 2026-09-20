@@ -49,7 +49,7 @@ npm run build
 ## 外部サービスと本番前提
 
 - Jevは既定で`unavailable`のため、キー未設定時は採点を実行せず`JEV_UNAVAILABLE`を返します。ローカルのstubはテスト専用です。接続先は`https://api.typesafe.ai`を既定値とし、環境変数で差し替えられます。
-- Groqは問題文・フィードバック生成用の任意のサーバー側プロバイダーです。`SCHEMASPRINT_LLM_MODE=unavailable`（既定）または空の`SCHEMASPRINT_GROQ_API_KEY`では`GROQ_UNAVAILABLE`として生成せず、キーはブラウザへ公開しません。`SCHEMASPRINT_LLM_MODE=groq`とAPI URL、モデル、タイムアウトは`infra/local/.env.example`を参照してください。429/5xxは再試行可能な明示的エラーとして上位のジョブ処理に渡します。
+- Groqは問題文・フィードバック生成用の任意のサーバー側プロバイダーです。`LLM_MODE=unavailable`（既定）または空の`GROQ_API_KEY`では`GROQ_UNAVAILABLE`として生成せず、キーはブラウザへ公開しません。`LLM_MODE=groq`とAPI URL、モデル、タイムアウトは`infra/local/.env.example`を参照してください。429/5xxは再試行可能な明示的エラーとして上位のジョブ処理に渡します。
 - Google/GitHub OAuth、Cloudflare Worker/R2、Supabase Auth/PostgreSQL、メール通知、広告、決済は本番のシークレット登録とE2E検証が必要です。
 - `docs/design/*/review.md` の未完了ゲート（実BFF/OAuth E2E、アクセシビリティ・モバイル実機、バックアップ・復旧、負荷・ペネトレーション、運用予算監視）を通過するまで本番公開しません。
 - 本リポジトリの環境ではDocker実行と本番デプロイを行っていません。
@@ -58,18 +58,18 @@ npm run build
 
 1. [Groq Console](https://console.groq.com/)でアカウントを作成し、開発用Projectを作成する。
 2. **API Keys → Create API Key** でキーを発行し、パスワード管理ツールへ一度だけ保存する。
-3. `SCHEMASPRINT_GROQ_API_KEY`として、バックエンドまたはWorkerのSecretへ登録する。`.env`、Git、ブラウザ環境変数、ログには書かない。
-4. `SCHEMASPRINT_LLM_MODE=groq`を設定し、サーバーを再起動する。キー未設定時は成功表示せず`LLM_UNAVAILABLE`となる。
+3. `GROQ_API_KEY`として、バックエンドまたはWorkerのSecretへ登録する。`.env`、Git、ブラウザ環境変数、ログには書かない。
+4. `LLM_MODE=groq`を設定し、サーバーを再起動する。キー未設定時は成功表示せず`LLM_UNAVAILABLE`となる。
 
 Groqのキー発行・API形式・制限は[公式ドキュメント](https://console.groq.com/docs/openai)を確認する。実キーの登録と本番利用は、データ処理条件・予算・レート上限を確認してから行う。
 
 ### Jevの接続先
 
-TypeSafe公式の接続先は`https://api.typesafe.ai/v1/systemone`です。設定値にはホスト部分の`https://api.typesafe.ai`を指定すると、バックエンドが`/v1/systemone`を付加します。公式APIは`Authorization: Bearer`で認証し、`model`・`state`・`questions`をJSONで送信します。[公式API仕様](https://docs.typesafe.ai/introduction)
+TypeSafe公式の接続先は`https://api.typesafe.ai/v1/systemone`です。設定値にはホスト部分の`https://api.typesafe.ai`を指定すると、バックエンドが`/v1/systemone`を付加します。公式APIは`Authorization: Bearer`で認証し、`model`・`state`・`questions`をJSONで送信します。[公式クイックスタート](https://docs.typesafe.ai/introduction/quickstart)
 
 ```env
-SCHEMASPRINT_JEV_MODE=external
-SCHEMASPRINT_JEV_BASE_URL=https://api.typesafe.ai
-SCHEMASPRINT_JEV_API_KEY=取得したキー
-SCHEMASPRINT_JEV_MODEL=jev-latest
+JEV_MODE=external
+JEV_BASE_URL=https://api.typesafe.ai
+JEV_API_KEY=取得したキー
+JEV_MODEL=jev-latest
 ```
