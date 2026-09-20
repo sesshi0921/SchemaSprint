@@ -16,8 +16,10 @@ Status: **NOT PASSED**
   server static-analysis snapshots. Rust-provided numerator, denominator,
   display score, and exact-full result are persisted and replayed; Python does
   not recompute the score on reads.
-- Jev modes without an implemented adapter resolve durably as `failed` with
+- Jev modes without a configured endpoint resolve durably as `failed` with
   `JEV_UNAVAILABLE`; the development stub is deterministic and local-only.
+  The external Jev adapter now validates the typed System One response and
+  retries only bounded transient failures without sending identity or tokens.
 - OAuth/provider-unavailable behavior, onboarding, profile/export/deletion,
   feedback/translation/community/report/job reads, and owner/admin content,
   publication, moderation, approvals, entitlements, and batch-job routes are
@@ -30,8 +32,11 @@ Status: **NOT PASSED**
 
 ## Remaining release gates
 
-- A production Jev adapter and Groq/NMT provider adapters, provider
-  timeout/retry workers, and the full asynchronous assessment/feedback
+- Groq is now a server-only, bounded adapter with explicit unavailable,
+  timeout, rate-limit, and upstream errors; it is not enabled by default.
+  Feedback generation still requires an authorized provider payload boundary,
+  strict generated-output persistence, NMT, and a durable worker lifecycle.
+  Provider timeout/retry workers and the full asynchronous assessment/feedback
   execution lifecycle remain unconnected.
 - Real Supabase OAuth/JWT/RLS/MFA integration, authenticated browser E2E,
   provider contract tests, and production backup/restore evidence remain
