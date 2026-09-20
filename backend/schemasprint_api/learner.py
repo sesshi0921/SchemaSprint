@@ -1674,7 +1674,7 @@ class LearnerRepository:
         return result
 
     async def request_feedback(
-        self, principal: Principal, submission_id: str
+        self, principal: Principal, submission_id: str, operation_key: UUID
     ) -> JobModel:
         """Create feedback safely without claiming an unavailable worker.
 
@@ -1688,7 +1688,12 @@ class LearnerRepository:
             row = await (
                 await connection.execute(
                     """
-                    SELECT s.id::text, s.rubric_snapshot, sr.submission_id
+                    SELECT s.id::text, s.problem_id::text, s.rubric_snapshot,
+                           s.assessment_snapshot, sr.submission_id,
+                           EXISTS (
+                             SELECT 1 FROM public.feedback_versions prior
+                             WHERE prior.submission_id = s.id
+                           ) AS has_feedback
                     FROM public.submissions s
                     LEFT JOIN public.submission_results sr ON sr.submission_id=s.id
                     WHERE s.id=%s AND s.user_id=public.current_user_id()
@@ -1701,9 +1706,72 @@ class LearnerRepository:
         if row["submission_id"] is None:
             raise HTTPException(status.HTTP_409_CONFLICT, "SUBMISSION_NOT_ASSESSED")
 
+        async with self.database.privileged() as connection:
+            await connection.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"feedback:{principal.user_id}:{row['problem_id']}",),
+            )
+            feedback_row = await (
+                await connection.execute(
+                    """
+                    SELECT EXISTS (
+                      SELECT 1 FROM public.feedback_versions prior
+                      JOIN public.submissions prior_submission
+                        ON prior_submission.id = prior.submission_id
+                      WHERE prior_submission.user_id=%s
+                        AND prior_submission.problem_id=%s
+                    ) AS has_feedback,
+                    EXISTS (
+                      SELECT 1 FROM private.feedback_requests pending
+                      WHERE pending.user_id=%s AND pending.problem_id=%s
+                        AND pending.state IN ('pending','leased')
+                    ) AS has_pending
+                    """,
+                    (
+                        principal.user_id,
+                        row["problem_id"],
+                        principal.user_id,
+                        row["problem_id"],
+                    ),
+                )
+            ).fetchone()
+            premium_row = await (
+                await connection.execute(
+                        """
+                        SELECT EXISTS (
+                          SELECT 1 FROM public.entitlements
+                          WHERE user_id=%s AND kind='premium'
+                            AND valid_from <= now()
+                            AND (valid_until IS NULL OR valid_until > now())
+                            AND revoked_at IS NULL
+                        ) AS active
+                        """,
+                        (principal.user_id,),
+                    )
+                ).fetchone()
+            premium = bool(premium_row and premium_row["active"])
+        if feedback_row and feedback_row["has_pending"]:
+            raise HTTPException(status.HTTP_409_CONFLICT, "FEEDBACK_IN_PROGRESS")
+        if feedback_row and feedback_row["has_feedback"] and not premium:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "REWARDED_ADS_DISABLED")
+
         job_id = str(__import__("ulid").new())
         provider = self.settings.llm_mode.value
         async with self.database.privileged() as connection:
+            await connection.execute(
+                """
+                INSERT INTO private.feedback_requests
+                  (id,user_id,problem_id,submission_id,operation_key)
+                VALUES (%s,%s,%s,%s,%s)
+                """,
+                (
+                    str(__import__("ulid").new()),
+                    principal.user_id,
+                    row["problem_id"],
+                    submission_id,
+                    operation_key,
+                ),
+            )
             await connection.execute(
                 """
                 INSERT INTO private.jobs(id, owner_user_id, kind, payload)
@@ -1728,6 +1796,10 @@ class LearnerRepository:
                     "UPDATE private.jobs SET state='failed', last_error_code=%s WHERE id=%s",
                     (failure_code, job_id),
                 )
+                await connection.execute(
+                    "UPDATE private.feedback_requests SET state='failed' WHERE operation_key=%s",
+                    (operation_key,),
+                )
             return JobModel(
                 id=job_id,
                 kind="feedback_generation",
@@ -1744,7 +1816,19 @@ class LearnerRepository:
         try:
             async with LocalStubClient() as client:
                 completion = await client.complete(
-                    [ChatMessage("user", "Generate development feedback JSON.")]
+                    [
+                        ChatMessage(
+                            "user",
+                            json.dumps(
+                                {
+                                    "rubric": rubric,
+                                    "assessment": row["assessment_snapshot"],
+                                },
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ),
+                        )
+                    ]
                 )
             generated = parse_feedback_output(
                 completion.content, allowed_requirement_ids=allowed_ids
@@ -1784,6 +1868,10 @@ class LearnerRepository:
                     "UPDATE private.jobs SET state='succeeded', last_error_code=NULL WHERE id=%s",
                     (job_id,),
                 )
+                await connection.execute(
+                    "UPDATE private.feedback_requests SET state='succeeded' WHERE operation_key=%s",
+                    (operation_key,),
+                )
             return JobModel(id=job_id, kind="feedback_generation", state="succeeded")
         except (FeedbackOutputError, ValueError):
             failure_code = "LLM_INVALID_OUTPUT"
@@ -1792,12 +1880,27 @@ class LearnerRepository:
                     "UPDATE private.jobs SET state='failed', last_error_code=%s WHERE id=%s",
                     (failure_code, job_id),
                 )
+                await connection.execute(
+                    "UPDATE private.feedback_requests SET state='failed' WHERE operation_key=%s",
+                    (operation_key,),
+                )
             return JobModel(
                 id=job_id,
                 kind="feedback_generation",
                 state="failed",
                 failureCode=failure_code,
             )
+        except Exception:
+            async with self.database.privileged() as connection:
+                await connection.execute(
+                    "UPDATE private.jobs SET state='failed', last_error_code='LLM_INTERNAL_ERROR' WHERE id=%s",
+                    (job_id,),
+                )
+                await connection.execute(
+                    "UPDATE private.feedback_requests SET state='failed' WHERE operation_key=%s",
+                    (operation_key,),
+                )
+            raise
 
     async def get_job(self, principal: Principal, job_id: str) -> JobModel | None:
         async with self.database.privileged() as connection:

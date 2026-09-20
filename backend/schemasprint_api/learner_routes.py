@@ -418,7 +418,9 @@ def register_learner_routes(
         require_csrf(request, principal, settings.csrf_key.get_secret_value())
 
         async def action() -> tuple[int, object]:
-            job = await repository.request_feedback(principal, submissionId)
+            job = await repository.request_feedback(
+                principal, submissionId, idempotency_key
+            )
             return status.HTTP_202_ACCEPTED, job
 
         return await _idempotent(
