@@ -1,0 +1,5 @@
+bucket         = "REPLACE-with-encrypted-tfstate-bucket"
+key            = "schemasprint/development/terraform.tfstate"
+region         = "REPLACE-with-state-region"
+dynamodb_table = "REPLACE-with-state-lock-table"
+encrypt        = true

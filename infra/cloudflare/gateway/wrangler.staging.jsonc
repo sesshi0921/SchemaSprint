@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "schemasprint-gateway-staging",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.5
+  },
+  "vars": {
+    "SCHEMASPRINT_ENVIRONMENT": "staging",
+    "SCHEMASPRINT_PAID_RUNTIME": "false"
+  },
+  "containers": [
+    {
+      "class_name": "SchemaSprintApiContainer",
+      "image": "./Dockerfile",
+      "image_build_context": "../../..",
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "API_CONTAINER", "class_name": "SchemaSprintApiContainer" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SchemaSprintApiContainer"] }]
+}

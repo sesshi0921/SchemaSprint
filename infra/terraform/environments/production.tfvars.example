@@ -1,0 +1,10 @@
+environment             = "production"
+owner                   = "schemasprint"
+expiry                  = ""
+cloudflare_account_id   = "00000000000000000000000000000000"
+cloudflare_zone_id      = "00000000000000000000000000000000"
+api_hostname            = "api.example.com"
+api_base_url            = "https://api.example.com/api"
+enable_paid_runtime     = false
+# Set true only after the budget/vendor/release gates in docs/design/07-cicd/review.md pass.
+enable_production_route = false

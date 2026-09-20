@@ -1,0 +1,17 @@
+{
+  "name": "schemasprint-cloudflare-gateway",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy --config wrangler.jsonc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "0.3.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260920.1",
+    "typescript": "5.9.3",
+    "wrangler": "4.135.0"
+  }
+}

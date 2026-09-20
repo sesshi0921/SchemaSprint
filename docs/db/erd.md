@@ -1,0 +1,32 @@
+``` mermaid
+erDiagram
+    USERS ||--o{ PROVIDER_IDENTITIES : owns
+    USERS ||--o{ AGE_DECLARATIONS : declares
+    USERS ||--o{ POLICY_ACKNOWLEDGEMENTS : acknowledges
+    POLICY_VERSIONS ||--o{ POLICY_ACKNOWLEDGEMENTS : records
+    USERS ||--o{ ROLE_GRANTS : receives
+    USERS ||--o{ ENTITLEMENTS : receives
+    USERS ||--o{ SESSIONS : opens
+    PROBLEMS ||--|{ PROBLEM_VERSIONS : versions
+    PROBLEM_VERSIONS ||--|{ RUBRIC_ITEMS : defines
+    PROBLEMS ||--o| PUBLICATION_CALENDAR : schedules
+    PUBLICATION_CALENDAR ||--o{ PUBLICATION_EVENTS : emits
+    USERS ||--o{ WORKSPACES : saves
+    PROBLEMS ||--o{ WORKSPACES : targets
+    USERS ||--o{ SUBMISSIONS : submits
+    PROBLEM_VERSIONS ||--o{ SUBMISSIONS : freezes
+    SUBMISSIONS ||--o| SUBMISSION_RESULTS : finalizes
+    SUBMISSION_RESULTS ||--|{ REQUIREMENT_RESULTS : includes
+    RUBRIC_ITEMS ||--o{ REQUIREMENT_RESULTS : evaluates
+    SUBMISSIONS ||--o{ FEEDBACK_VERSIONS : explains
+    USERS ||--o{ FEEDBACK_REQUESTS : requests
+    FEEDBACK_REQUESTS ||--o| FEEDBACK_VERSIONS : produces
+    AD_REWARD_ATTEMPTS o|--o| FEEDBACK_REQUESTS : unlocks
+    SUBMISSIONS ||--o{ POSTS : shares
+    POSTS ||--o{ MODERATION_DECISIONS : moderates
+    USERS ||--o{ REPORTS : reports
+    NOTICES ||--|{ NOTICE_VERSIONS : versions
+    NOTICE_VERSIONS ||--o{ NOTICE_READS : records
+    USERS ||--o{ NOTICE_READS : reads
+    ADMIN_APPROVALS }o--|| USERS : authorizes
+```

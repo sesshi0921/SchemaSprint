@@ -1,0 +1,58 @@
+services:
+  postgres:
+    image: postgres:16.6-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?copy infra/local/.env.example to infra/local/.env}
+      POSTGRES_USER: ${POSTGRES_USER:?copy infra/local/.env.example to infra/local/.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?copy infra/local/.env.example to infra/local/.env}
+    volumes:
+      - schemasprint_pgdata:/var/lib/postgresql/data
+      - ./local/postgres-init/0000_auth.sql:/docker-entrypoint-initdb.d/0000_auth.sql:ro
+      - ../db/migrations/0001_initial.sql:/docker-entrypoint-initdb.d/0001_initial.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    build:
+      context: ..
+      dockerfile: infra/cloudflare/gateway/Dockerfile
+    environment:
+      SCHEMASPRINT_ENVIRONMENT: development
+      SCHEMASPRINT_DATABASE_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      SCHEMASPRINT_SESSION_PEPPER: ${SCHEMASPRINT_SESSION_PEPPER:?copy infra/local/.env.example to infra/local/.env}
+      SCHEMASPRINT_CSRF_KEY: ${SCHEMASPRINT_CSRF_KEY:?copy infra/local/.env.example to infra/local/.env}
+      SCHEMASPRINT_ALLOWED_ORIGIN: ${SCHEMASPRINT_ALLOWED_ORIGIN:?copy infra/local/.env.example to infra/local/.env}
+      SCHEMASPRINT_JEV_MODE: stub
+      SCHEMASPRINT_BILLING_ENABLED: "false"
+      SCHEMASPRINT_REWARDED_ADS_ENABLED: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=2)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: infra/local/frontend.Dockerfile
+      args:
+        VITE_API_BASE_URL: /api
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/healthz >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  schemasprint_pgdata:

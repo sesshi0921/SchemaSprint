@@ -1,0 +1,164 @@
+name: Authorized deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Deploy or roll back the Worker version
+        required: true
+        default: deploy
+        type: choice
+        options: [deploy, rollback]
+      environment:
+        description: GitHub environment name (must have required reviewers)
+        required: true
+        type: choice
+        options: [staging, production]
+      deploy_container:
+        description: Deploy Worker and Container through Wrangler
+        required: true
+        default: false
+        type: boolean
+      rollback_version:
+        description: Existing Worker version ID (required when action=rollback)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 22
+
+jobs:
+  ci:
+    name: Required CI gate
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  validate:
+    name: Validate release gates
+    needs: ci
+    if: ${{ inputs.action == 'deploy' }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Validate environment, API base, and paid/container gates
+        env:
+          EXPECTED_ENVIRONMENT: ${{ inputs.environment }}
+          SCHEMASPRINT_ENVIRONMENT: ${{ vars.SCHEMASPRINT_ENVIRONMENT }}
+          ENABLE_PAID_RUNTIME: ${{ vars.ENABLE_PAID_RUNTIME }}
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+          PAGES_PROJECT_NAME: ${{ vars.PAGES_PROJECT_NAME }}
+          SMOKE_WEB_URL: ${{ vars.SMOKE_WEB_URL }}
+          SMOKE_API_URL: ${{ vars.SMOKE_API_URL }}
+          DEPLOY_CONTAINER: ${{ inputs.deploy_container }}
+          SCHEMASPRINT_DATABASE_DSN: ${{ secrets.SCHEMASPRINT_DATABASE_DSN }}
+          SCHEMASPRINT_SESSION_PEPPER: ${{ secrets.SCHEMASPRINT_SESSION_PEPPER }}
+          SCHEMASPRINT_CSRF_KEY: ${{ secrets.SCHEMASPRINT_CSRF_KEY }}
+          SCHEMASPRINT_ALLOWED_ORIGIN: ${{ secrets.SCHEMASPRINT_ALLOWED_ORIGIN }}
+        run: |
+          set -euo pipefail
+          test "$SCHEMASPRINT_ENVIRONMENT" = "$EXPECTED_ENVIRONMENT"
+          test -n "$PAGES_PROJECT_NAME"
+          test -n "$VITE_API_BASE_URL"
+          case "$VITE_API_BASE_URL" in
+            /api|https://*) ;;
+            *) echo "VITE_API_BASE_URL must be /api or an HTTPS URL" >&2; exit 1 ;;
+          esac
+          test -n "$SMOKE_WEB_URL"
+          if [ "$DEPLOY_CONTAINER" = "true" ]; then
+            test "$ENABLE_PAID_RUNTIME" = "true"
+            test -n "$SMOKE_API_URL"
+            test -n "$SCHEMASPRINT_DATABASE_DSN"
+            test -n "$SCHEMASPRINT_SESSION_PEPPER"
+            test -n "$SCHEMASPRINT_CSRF_KEY"
+            test -n "$SCHEMASPRINT_ALLOWED_ORIGIN"
+          fi
+          config="infra/cloudflare/gateway/wrangler.${EXPECTED_ENVIRONMENT}.jsonc"
+          grep -Fq "\"SCHEMASPRINT_ENVIRONMENT\": \"$SCHEMASPRINT_ENVIRONMENT\"" "$config"
+          paid_marker=$(grep -F '"SCHEMASPRINT_PAID_RUNTIME"' "$config" | sed -E 's/.*"SCHEMASPRINT_PAID_RUNTIME": "([^"]+)".*/\1/')
+          if [ "$DEPLOY_CONTAINER" = "true" ]; then
+            test "$paid_marker" = "true"
+          else
+            test "$paid_marker" = "false"
+          fi
+
+  deploy:
+    name: Deploy ${{ inputs.environment }}
+    needs: validate
+    if: ${{ inputs.action == 'deploy' }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build frontend exactly as Pages is configured
+        run: npm ci && npm run build
+        working-directory: frontend
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+      - name: Install Wrangler gateway dependencies
+        run: npm ci
+        working-directory: infra/cloudflare/gateway
+      - name: Deploy Pages direct upload
+        run: ./infra/cloudflare/gateway/node_modules/.bin/wrangler pages deploy frontend/dist --project-name "$PAGES_PROJECT_NAME" --branch "$GITHUB_REF_NAME"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PAGES_PROJECT_NAME: ${{ vars.PAGES_PROJECT_NAME }}
+      - name: Deploy private Worker and Container (explicitly opted in)
+        if: ${{ inputs.deploy_container }}
+        run: ./infra/cloudflare/gateway/node_modules/.bin/wrangler deploy --config infra/cloudflare/gateway/wrangler.${{ inputs.environment }}.jsonc
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Smoke test Pages
+        run: curl --fail --silent --show-error --retry 3 --retry-delay 5 --max-time 20 "$SMOKE_WEB_URL/"
+        env:
+          SMOKE_WEB_URL: ${{ vars.SMOKE_WEB_URL }}
+      - name: Smoke test gateway health
+        if: ${{ inputs.deploy_container }}
+        run: curl --fail --silent --show-error --retry 5 --retry-delay 5 --max-time 20 "$SMOKE_API_URL/healthz"
+        env:
+          SMOKE_API_URL: ${{ vars.SMOKE_API_URL }}
+
+  rollback:
+    name: Roll back ${{ inputs.environment }} Worker
+    needs: ci
+    if: ${{ inputs.action == 'rollback' }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: infra/cloudflare/gateway/package-lock.json
+      - name: Install Wrangler
+        run: npm ci
+        working-directory: infra/cloudflare/gateway
+      - name: Validate rollback version
+        env:
+          ROLLBACK_VERSION: ${{ inputs.rollback_version }}
+        run: test -n "$ROLLBACK_VERSION"
+      - name: Roll back Worker to immutable version
+        run: ./infra/cloudflare/gateway/node_modules/.bin/wrangler rollback "$ROLLBACK_VERSION" --name "schemasprint-gateway-${{ inputs.environment }}" --config infra/cloudflare/gateway/wrangler.${{ inputs.environment }}.jsonc --yes
+        env:
+          ROLLBACK_VERSION: ${{ inputs.rollback_version }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Smoke test gateway after rollback
+        run: curl --fail --silent --show-error --retry 5 --retry-delay 5 --max-time 20 "$SMOKE_API_URL/healthz"
+        env:
+          SMOKE_API_URL: ${{ vars.SMOKE_API_URL }}

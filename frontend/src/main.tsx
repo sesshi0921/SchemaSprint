@@ -1,0 +1,20 @@
+import { StrictMode, useCallback, useEffect, useRef, useState } from 'react'
+import { createRoot } from 'react-dom/client'
+import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { api } from './lib/api'
+import type { SessionState } from './lib/types'
+import { AppShell } from './components/AppShell'
+import { HomePage } from './pages/HomePage'
+import { ProblemsPage } from './pages/ProblemsPage'
+import { WorkspacePage } from './pages/WorkspacePage'
+import { ResultPage } from './pages/ResultPage'
+import { DashboardPage } from './pages/DashboardPage'
+import { SettingsPage } from './pages/SettingsPage'
+import { NoticesPage } from './pages/NoticesPage'
+import { SignInPage } from './pages/SignInPage'
+import { OnboardingPage } from './pages/OnboardingPage'
+import { cache } from './lib/cache'
+import './design-system/styles.css'
+
+export function App() { const [session, setSession] = useState<SessionState | null>(null); const [sessionError, setSessionError] = useState(false); const previousAccount = useRef<string | null>(null); const refresh = useCallback(() => { setSessionError(false); api.session().then(setSession).catch((error: unknown) => { if (error instanceof Error && 'status' in error && [401, 403].includes(Number((error as { status?: number }).status))) setSession({ authenticated: false, csrfToken: null, gates: null }); else { setSession(null); setSessionError(true) } }) }, []); useEffect(refresh, [refresh]); useEffect(() => { const current = session?.profile?.id ?? null; if (current && previousAccount.current && current !== previousAccount.current) void cache.clearAccount(previousAccount.current).catch(() => undefined); previousAccount.current = current }, [session?.profile?.id]); return <BrowserRouter><AppShell session={session} sessionError={sessionError} onRefresh={refresh}><Routes><Route path="/" element={<HomePage session={session} />} /><Route path="/signin" element={<SignInPage />} /><Route path="/onboarding" element={<OnboardingPage session={session} onComplete={refresh} />} /><Route path="/problems" element={<ProblemsPage session={session} />} /><Route path="/problem/:problemId" element={<WorkspacePage session={session} />} /><Route path="/result/:submissionId" element={<ResultPage session={session} />} /><Route path="/dashboard" element={<DashboardPage session={session} />} /><Route path="/settings" element={<SettingsPage session={session} />} /><Route path="/notices" element={<NoticesPage session={session} />} /><Route path="*" element={<HomePage session={session} />} /></Routes></AppShell></BrowserRouter> }
+createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>)
