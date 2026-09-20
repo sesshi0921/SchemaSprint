@@ -257,6 +257,7 @@ async def test_today_serializes_problem_detail_with_state_and_locale(
     assert body["passed"] is False
     assert len(body["rubricSummary"]) == 1
 
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["google", "github"])
 async def test_oauth_never_claims_success_without_provider_adapter(
