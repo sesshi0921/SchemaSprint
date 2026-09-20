@@ -7,6 +7,7 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from .config import Settings
+from .oauth import state_hash
 from .security import Principal, token_digest
 
 
@@ -118,3 +119,93 @@ class Database:
                 await connection.execute("SELECT public.can_learn() AS allowed")
             ).fetchone()
         return bool(row and row["allowed"])
+
+    async def create_oauth_attempt(
+        self,
+        provider: str,
+        state: str,
+        pkce_ciphertext: bytes,
+        redirect_uri: str,
+        expires_at: Any,
+    ) -> None:
+        digest = state_hash(state, self.settings.session_pepper.get_secret_value())
+        async with self.privileged() as connection:
+            await connection.execute(
+                """
+                INSERT INTO private.oauth_attempts
+                    (
+                        state_hash,
+                        provider,
+                        pkce_verifier_ciphertext,
+                        redirect_uri,
+                        expires_at,
+                    )
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (digest, provider, pkce_ciphertext, redirect_uri, expires_at),
+            )
+
+    async def consume_oauth_attempt(
+        self, provider: str, state: str, redirect_uri: str
+    ) -> tuple[bytes, str] | None:
+        digest = state_hash(state, self.settings.session_pepper.get_secret_value())
+        async with self.privileged() as connection:
+            row = await (
+                await connection.execute(
+                    """
+                    UPDATE private.oauth_attempts
+                    SET consumed_at = now()
+                    WHERE state_hash = %s AND provider = %s
+                      AND redirect_uri = %s AND consumed_at IS NULL
+                      AND expires_at > now()
+                    RETURNING pkce_verifier_ciphertext, redirect_uri
+                    """,
+                    (digest, provider, redirect_uri),
+                )
+            ).fetchone()
+        if row is None:
+            return None
+        return bytes(row["pkce_verifier_ciphertext"]), str(row["redirect_uri"])
+
+    async def create_session_for_identity(
+        self, provider: str, subject: str
+    ) -> str | None:
+        """Create a session only for an existing, verified, allowlisted identity."""
+        import secrets
+
+        from ulid import new as new_ulid
+
+        raw_token = secrets.token_urlsafe(48)
+        digest = token_digest(
+            raw_token, self.settings.session_pepper.get_secret_value()
+        )
+        async with self.privileged() as connection:
+            row = await (
+                await connection.execute(
+                    """
+                    SELECT pi.user_id
+                    FROM public.provider_identities pi
+                    JOIN private.identity_allowlist al
+                      ON al.issuer = pi.issuer AND al.subject = pi.subject
+                     AND al.disabled_at IS NULL
+                    WHERE pi.issuer = %s AND pi.subject = %s
+                      AND pi.verified_at IS NOT NULL
+                    FOR UPDATE OF pi
+                    """,
+                    (provider, subject),
+                )
+            ).fetchone()
+            if row is None:
+                return None
+            await connection.execute(
+                """
+                INSERT INTO private.sessions (id, user_id, token_hash, expires_at)
+                VALUES (%s, %s, %s, now() + interval '30 days')
+                """,
+                (
+                    str(new_ulid()),
+                    str(row["user_id"]),
+                    digest,
+                ),
+            )
+        return raw_token

@@ -8,6 +8,7 @@ The root `openapi.yaml` is the contract. The Cloudflare Worker is the sole publi
 - Every cookie-authenticated mutation requires `X-CSRF-Token`. Every mutation also requires an UUID idempotency key; the server binds it to user, operation and canonical payload digest. Same key/same body returns the original outcome; same key/different body returns 409.
 - OAuth callback is protected by one-use state instead of a CSRF header. Reads never cause entitlement, moderation, publication or model side effects.
 - Error bodies use safe problem details and request IDs. No database, authorization rule, prompt, model trace, provider body, email, token or secret appears in a client error.
+- OAuth start/callback is server-held and configurable: exact provider redirect URIs, one-use state, encrypted PKCE verifier, HTTPS endpoints outside tests, and allowlisted existing provider identities are required. The current MVP deliberately does not auto-provision Supabase Auth users. Provider userinfo is fetched only from the configured HTTPS endpoint; full Google OIDC ID-token JWKS issuer/audience verification remains a production release gate before enabling new-account provisioning.
 - Pagination cursors are opaque, signed/versioned, limited to 100 rows, and bound to normalized filters. Dates are ISO 8601; daily attribution is a JST date.
 - `202` means durable work was accepted, not succeeded. Clients poll the returned resource/job with bounded backoff. Provider unavailability remains pending/failed and never becomes fabricated feedback or assessment.
 

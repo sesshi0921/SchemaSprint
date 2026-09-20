@@ -28,6 +28,37 @@ class LLMMode(StrEnum):
     GROQ = "groq"
 
 
+class OAuthProviderSettings:
+    """Provider settings are intentionally kept server-side and exact."""
+
+    def __init__(
+        self,
+        *,
+        client_id: SecretStr | None,
+        client_secret: SecretStr | None,
+        authorize_url: AnyHttpUrl,
+        token_url: AnyHttpUrl,
+        userinfo_url: AnyHttpUrl,
+        redirect_uri: AnyHttpUrl | None,
+    ) -> None:
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.authorize_url = authorize_url
+        self.token_url = token_url
+        self.userinfo_url = userinfo_url
+        self.redirect_uri = redirect_uri
+
+    @property
+    def configured(self) -> bool:
+        return bool(
+            self.client_id
+            and self.client_id.get_secret_value().strip()
+            and self.client_secret
+            and self.client_secret.get_secret_value().strip()
+            and self.redirect_uri
+        )
+
+
 # The edge, Python service, and Rust FFI deliberately share one reversible
 # request/payload ceiling.  Smaller per-field limits remain useful for
 # validation, but no layer may accept a larger aggregate payload.
@@ -63,6 +94,26 @@ class Settings(BaseSettings):
     groq_api_key: SecretStr | None = None
     groq_model: str = "openai/gpt-oss-20b"
     groq_timeout_seconds: float = 20.0
+    google_client_id: SecretStr | None = None
+    google_client_secret: SecretStr | None = None
+    google_redirect_uri: AnyHttpUrl | None = None
+    google_authorize_url: AnyHttpUrl = AnyHttpUrl(
+        "https://accounts.google.com/o/oauth2/v2/auth"
+    )
+    google_token_url: AnyHttpUrl = AnyHttpUrl("https://oauth2.googleapis.com/token")
+    google_userinfo_url: AnyHttpUrl = AnyHttpUrl(
+        "https://openidconnect.googleapis.com/v1/userinfo"
+    )
+    github_client_id: SecretStr | None = None
+    github_client_secret: SecretStr | None = None
+    github_redirect_uri: AnyHttpUrl | None = None
+    github_authorize_url: AnyHttpUrl = AnyHttpUrl(
+        "https://github.com/login/oauth/authorize"
+    )
+    github_token_url: AnyHttpUrl = AnyHttpUrl(
+        "https://github.com/login/oauth/access_token"
+    )
+    github_userinfo_url: AnyHttpUrl = AnyHttpUrl("https://api.github.com/user")
     billing_enabled: Literal[False] = False
     rewarded_ads_enabled: Literal[False] = False
     database_pool_min: int = 1
@@ -149,7 +200,47 @@ class Settings(BaseSettings):
             and self.groq_api_url.scheme.lower() != "https"
         ):
             raise ValueError("Groq URL must use HTTPS outside development")
+        oauth_urls = (
+            self.google_authorize_url,
+            self.google_token_url,
+            self.google_userinfo_url,
+            self.github_authorize_url,
+            self.github_token_url,
+            self.github_userinfo_url,
+            self.google_redirect_uri,
+            self.github_redirect_uri,
+        )
+        for redirect in oauth_urls:
+            if (
+                redirect is not None
+                and self.environment is not Environment.TEST
+                and redirect.scheme != "https"
+            ):
+                raise ValueError(
+                    "OAuth endpoints and redirect URI must use HTTPS outside test"
+                )
         return self
+
+    def oauth_provider(self, provider: str) -> OAuthProviderSettings:
+        if provider == "google":
+            return OAuthProviderSettings(
+                client_id=self.google_client_id,
+                client_secret=self.google_client_secret,
+                authorize_url=self.google_authorize_url,
+                token_url=self.google_token_url,
+                userinfo_url=self.google_userinfo_url,
+                redirect_uri=self.google_redirect_uri,
+            )
+        if provider == "github":
+            return OAuthProviderSettings(
+                client_id=self.github_client_id,
+                client_secret=self.github_client_secret,
+                authorize_url=self.github_authorize_url,
+                token_url=self.github_token_url,
+                userinfo_url=self.github_userinfo_url,
+                redirect_uri=self.github_redirect_uri,
+            )
+        raise ValueError("unsupported OAuth provider")
 
 
 @lru_cache

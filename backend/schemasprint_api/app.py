@@ -4,6 +4,7 @@ from hashlib import sha256
 from typing import Annotated
 from uuid import UUID, uuid4
 
+import httpx
 from fastapi import (
     Depends,
     FastAPI,
@@ -15,6 +16,7 @@ from fastapi import (
     status,
 )
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict
 
 from .admin_routes import register_admin_routes
@@ -37,6 +39,12 @@ from .http_security import (
     security_headers,
 )
 from .learner_routes import _idempotent, register_learner_routes
+from .oauth import (
+    authorization_url,
+    decrypt_verifier,
+    exchange_and_fetch,
+    new_attempt,
+)
 from .problems import Locale, ProblemDetail, ProblemRepository
 from .security import SESSION_COOKIE, Principal, csrf_token, require_csrf
 
@@ -229,11 +237,28 @@ def create_app(
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND, "OAUTH_PROVIDER_NOT_SUPPORTED"
             )
-        # Provider client credentials and exact redirect allowlists are not
-        # configured in the local MVP. Do not fabricate a provider URL or
-        # create an OAuth state that cannot be completed safely.
-        _ = return_to
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "OAUTH_NOT_CONFIGURED")
+        if not return_to.startswith("/") or return_to.startswith("//"):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "OAUTH_RETURN_TO_INVALID")
+        provider_config = resolved.oauth_provider(provider)
+        if not provider_config.configured or provider_config.redirect_uri is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, "OAUTH_NOT_CONFIGURED"
+            )
+        state, verifier, ciphertext, expires_at = new_attempt(resolved, provider)
+        await database.create_oauth_attempt(
+            provider, state, ciphertext, str(provider_config.redirect_uri), expires_at
+        )
+        try:
+            location = authorization_url(
+                resolved, provider, provider_config, state, verifier
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, "OAUTH_NOT_CONFIGURED"
+            ) from error
+        return RedirectResponse(
+            url=location, status_code=status.HTTP_303_SEE_OTHER
+        )
 
     @app.get("/api/v1/auth/{provider}/callback")
     async def finish_oauth(
@@ -245,10 +270,44 @@ def create_app(
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND, "OAUTH_PROVIDER_NOT_SUPPORTED"
             )
-        # Never accept or log the authorization code without a configured
-        # provider adapter, state store, PKCE verifier, and issuer validation.
-        _ = (code, state)
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "OAUTH_NOT_CONFIGURED")
+        provider_config = resolved.oauth_provider(provider)
+        if not provider_config.configured or provider_config.redirect_uri is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, "OAUTH_NOT_CONFIGURED"
+            )
+        attempt = await database.consume_oauth_attempt(
+            provider, state, str(provider_config.redirect_uri)
+        )
+        if attempt is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "OAUTH_STATE_INVALID")
+        try:
+            verifier = decrypt_verifier(resolved, attempt[0])
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(10.0), follow_redirects=False
+            ) as client:
+                identity = await exchange_and_fetch(
+                    client, provider_config, code, verifier
+                )
+            raw_token = await database.create_session_for_identity(
+                provider, identity.subject
+            )
+        except (ValueError, httpx.HTTPError):
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, "OAUTH_IDENTITY_INVALID"
+            ) from None
+        if raw_token is None:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "OAUTH_NOT_ALLOWLISTED")
+        response = RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
+        response.set_cookie(
+            SESSION_COOKIE,
+            raw_token,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            path="/",
+            max_age=30 * 24 * 60 * 60,
+        )
+        return response
 
     @app.get("/health/live", include_in_schema=False)
     async def live() -> dict[str, str]:
