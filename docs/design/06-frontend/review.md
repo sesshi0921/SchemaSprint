@@ -29,6 +29,7 @@ Browser smoke verification against the Vite dev server confirmed the home, sign-
 ## Findings repaired
 
 - Prevented Vite's HTML fallback from being accepted as an API JSON response (avoids blank/crashed pages without a BFF).
+- Reworked the home route from a generic hero/card-metric layout into a task-first daily brief with document-flow sections and factual practice notes; no invented metrics are shown.
 - Added required library filters for genre and publication date; removed the dead “Saved filters” action.
 - Made sign-out and account export call their contract endpoints; account deletion remains an explicit no-send message until a server re-authentication-proof initiation route exists.
 - Added offline problem-detail fallback and stable idempotency keys for queued submissions.
