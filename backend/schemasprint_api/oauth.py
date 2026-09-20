@@ -59,9 +59,11 @@ def authorization_url(
 ) -> str:
     if not config.configured or config.redirect_uri is None or config.client_id is None:
         raise ValueError("OAuth provider is not configured")
-    challenge = base64.urlsafe_b64encode(
-        hashlib.sha256(verifier.encode()).digest()
-    ).rstrip(b"=").decode()
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+        .rstrip(b"=")
+        .decode()
+    )
     params = {
         "client_id": config.client_id.get_secret_value(),
         "redirect_uri": str(config.redirect_uri),

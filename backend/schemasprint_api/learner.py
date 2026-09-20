@@ -1737,7 +1737,7 @@ class LearnerRepository:
             ).fetchone()
             premium_row = await (
                 await connection.execute(
-                        """
+                    """
                         SELECT EXISTS (
                           SELECT 1 FROM public.entitlements
                           WHERE user_id=%s AND kind='premium'
@@ -1746,14 +1746,16 @@ class LearnerRepository:
                             AND revoked_at IS NULL
                         ) AS active
                         """,
-                        (principal.user_id,),
-                    )
-                ).fetchone()
+                    (principal.user_id,),
+                )
+            ).fetchone()
             premium = bool(premium_row and premium_row["active"])
         if feedback_row and feedback_row["has_pending"]:
             raise HTTPException(status.HTTP_409_CONFLICT, "FEEDBACK_IN_PROGRESS")
         if feedback_row and feedback_row["has_feedback"] and not premium:
-            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "REWARDED_ADS_DISABLED")
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, "REWARDED_ADS_DISABLED"
+            )
 
         job_id = str(__import__("ulid").new())
         provider = self.settings.llm_mode.value

@@ -256,9 +256,7 @@ def create_app(
             raise HTTPException(
                 status.HTTP_503_SERVICE_UNAVAILABLE, "OAUTH_NOT_CONFIGURED"
             ) from error
-        return RedirectResponse(
-            url=location, status_code=status.HTTP_303_SEE_OTHER
-        )
+        return RedirectResponse(url=location, status_code=status.HTTP_303_SEE_OTHER)
 
     @app.get("/api/v1/auth/{provider}/callback")
     async def finish_oauth(

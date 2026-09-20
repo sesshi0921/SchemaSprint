@@ -23,7 +23,9 @@ def settings() -> Settings:
         allowed_origin=AnyHttpUrl("https://schemasprint.test"),
         google_client_id=SecretStr("client"),
         google_client_secret=SecretStr("secret"),
-        google_redirect_uri=AnyHttpUrl("https://schemasprint.test/api/v1/auth/google/callback"),
+        google_redirect_uri=AnyHttpUrl(
+            "https://schemasprint.test/api/v1/auth/google/callback"
+        ),
     )
 
 
