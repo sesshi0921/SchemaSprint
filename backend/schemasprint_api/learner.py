@@ -33,6 +33,7 @@ from .core import (
     validate_canonical_schema,
 )
 from .database import Database
+from .jev import JevClient, JevError
 from .problems import Locale, ProblemDetail
 from .security import Principal
 
@@ -800,6 +801,86 @@ class LearnerRepository:
         return results
 
     @staticmethod
+    def _is_static_spec(spec: object) -> bool:
+        """Whether a rubric evaluator can be decided without semantic inference."""
+        if not isinstance(spec, Mapping):
+            return False
+        return any(
+            key in spec
+            for key in (
+                "requiredTable",
+                "tableId",
+                "requiredColumn",
+                "requiredRelationship",
+                "always",
+            )
+        )
+
+    @classmethod
+    def _jev_questions(
+        cls, rubric: Sequence[Mapping[str, Any]]
+    ) -> dict[str, dict[str, Any]]:
+        questions: dict[str, dict[str, Any]] = {}
+        for item in rubric:
+            if cls._is_static_spec(item.get("evaluator_spec")):
+                continue
+            item_id = str(item["id"])
+            description = str(item.get("description_en") or "the requirement")
+            derivation = str(item.get("textual_derivation") or "")
+            detail = f"\nDerivation context: {derivation}" if derivation else ""
+            questions[f"rubric_{item_id}"] = {
+                "type": "noul",
+                "instructions": (
+                    "Does the candidate schema satisfy this database-design requirement "
+                    f"without inventing unstated facts? Requirement: {description}.{detail}"
+                ),
+                "criteria": {
+                    "true": "The candidate schema satisfies the requirement.",
+                    "false": "The candidate schema does not satisfy the requirement.",
+                },
+            }
+        # Keep Jev in the path even when all rubric items are statically decidable;
+        # this question is advisory and never replaces the deterministic rules.
+        questions["consistency"] = {
+            "type": "noul",
+            "instructions": (
+                "Does the candidate schema contradict any explicit requirement in the "
+                "problem statement or rubric?"
+            ),
+            "criteria": {
+                "true": "There is a clear contradiction with an explicit requirement.",
+                "false": "There is no clear contradiction with an explicit requirement.",
+            },
+        }
+        return questions
+
+    @staticmethod
+    def _jev_state(
+        problem_snapshot: Mapping[str, Any],
+        schema: Mapping[str, Any],
+        static_analysis: Mapping[str, Any],
+        rubric: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Build a provider state containing only task data, never identity/secrets."""
+        return {
+            "problem": {
+                "statementEn": problem_snapshot.get("statementEn"),
+                "difficulty": problem_snapshot.get("difficulty"),
+                "genre": problem_snapshot.get("genre"),
+            },
+            "candidateSchema": schema,
+            "staticAnalysis": static_analysis,
+            "rubric": [
+                {
+                    "id": str(item["id"]),
+                    "descriptionEn": item.get("description_en"),
+                    "textualDerivation": item.get("textual_derivation"),
+                }
+                for item in rubric
+            ],
+        }
+
+    @staticmethod
     def _server_static_analysis(
         schema: Mapping[str, Any], decisions: Sequence[Mapping[str, Any]]
     ) -> dict[str, Any]:
@@ -888,13 +969,64 @@ class LearnerRepository:
         result: AssessmentResultModel | None = None
         state: Literal["pending", "assessed", "failed"] = "failed"
         failure_code: str | None = None
-        if jev_mode is not JevMode.STUB:
-            # No provider adapter exists in this service yet.  Persist a
-            # definitive failure instead of returning a job that can never
-            # resolve.  A future worker may add a real external adapter.
-            result = None
-            state = "failed"
+        jev_output: dict[str, Any] = {}
+        jev_version = "stub-v1"
+        requirement_confidence: dict[str, float] = {}
+        requirement_source: dict[str, Literal["static", "jev"]] = {
+            str(item["id"]): (
+                "static"
+                if jev_mode is JevMode.STUB
+                or self._is_static_spec(item.get("evaluator_spec"))
+                else "jev"
+            )
+            for item in rubric
+        }
+        if jev_mode is JevMode.UNAVAILABLE:
             failure_code = "JEV_UNAVAILABLE"
+        elif jev_mode is JevMode.EXTERNAL:
+            if self.settings.jev_base_url is None or self.settings.jev_api_key is None:
+                failure_code = "JEV_UNAVAILABLE"
+            else:
+                try:
+                    client = JevClient(
+                        str(self.settings.jev_base_url),
+                        self.settings.jev_api_key.get_secret_value(),
+                        model=self.settings.jev_model,
+                        timeout_seconds=self.settings.jev_timeout_seconds,
+                        max_retries=self.settings.jev_max_retries,
+                    )
+                    jev_assessment = await client.assess(
+                        state=self._jev_state(
+                            problem_snapshot,
+                            schema_payload,
+                            static_analysis_snapshot,
+                            rubric,
+                        ),
+                        questions=self._jev_questions(rubric),
+                    )
+                except JevError as error:
+                    failure_code = error.code
+                else:
+                    jev_version = jev_assessment.model
+                    jev_output = jev_assessment.raw
+                    for item in rubric:
+                        item_id = str(item["id"])
+                        answer = jev_assessment.decisions.get(f"rubric_{item_id}")
+                        if answer is not None:
+                            for decision in static_decisions:
+                                if decision["rubricItemId"] == item_id:
+                                    decision["decision"] = (
+                                        "satisfied" if answer.satisfied else "not_met"
+                                    )
+                                    requirement_confidence[item_id] = answer.confidence
+                                    break
+                    consistency = jev_assessment.decisions.get("consistency")
+                    contradiction = contradiction or bool(
+                        consistency is not None and not consistency.satisfied
+                    )
+        # Stub is deliberately local-only and deterministic. External Jev is
+        # the only path where semantic decisions can alter static output.
+        if failure_code is not None:
             assessment_snapshot = {
                 "state": state,
                 "failureCode": failure_code,
@@ -903,6 +1035,7 @@ class LearnerRepository:
                 "staticAnalysis": static_analysis_snapshot,
                 "rubric": rubric_snapshot,
                 "problemVersionId": payload.problemVersionId,
+                "jevOutput": jev_output,
             }
         else:
             try:
@@ -930,14 +1063,26 @@ class LearnerRepository:
                 exactFull=assessment.exact_full,
                 passed=assessment.passed,
                 contradiction=contradiction,
-                confidence=100,
+                confidence=(
+                    min(
+                        100.0,
+                        sum(requirement_confidence.values())
+                        / len(requirement_confidence),
+                    )
+                    if requirement_confidence
+                    else 100
+                ),
                 requirements=[
                     AssessmentRequirementModel(
                         rubricItemId=decision["rubricItemId"],
                         decision=decision["decision"],
-                        source="static",
-                        confidence=None,
-                        impact="deterministic development stub",
+                        source=requirement_source[decision["rubricItemId"]],
+                        confidence=requirement_confidence.get(decision["rubricItemId"]),
+                        impact=(
+                            "Jev semantic judgment"
+                            if requirement_source[decision["rubricItemId"]] == "jev"
+                            else "deterministic server rule"
+                        ),
                     )
                     for decision in static_decisions
                 ],
@@ -953,6 +1098,8 @@ class LearnerRepository:
                     item.model_dump(mode="json") for item in result.requirements
                 ],
                 "jevMode": jev_mode.value,
+                "jevVersion": jev_version,
+                "jevOutput": jev_output,
                 "staticAnalysis": static_analysis_snapshot,
                 "rubric": rubric_snapshot,
                 "problemVersionId": payload.problemVersionId,
@@ -1035,14 +1182,20 @@ class LearnerRepository:
                         assessment.total_weight,
                         assessment.passed,
                         contradiction,
-                        100,
+                        result.confidence,
                         assessment.numerator,
                         assessment.denominator,
                         assessment.display_tenths,
                         assessment.exact_full,
-                        "stub",
-                        json.dumps({"decisions": static_decisions}),
-                        json.dumps({"mode": "stub"}),
+                        jev_version,
+                        json.dumps(
+                            {
+                                "decisions": static_decisions,
+                                "analysis": static_analysis_snapshot,
+                            },
+                            separators=(",", ":"),
+                        ),
+                        json.dumps(jev_output, separators=(",", ":")),
                     ),
                 )
             if replay_id is None and result is not None:
@@ -1052,13 +1205,19 @@ class LearnerRepository:
                         """
                         INSERT INTO public.requirement_results
                           (submission_id,rubric_item_id,decision,source,confidence,impact)
-                        VALUES (%s,%s,%s,'static',NULL,%s)
+                        VALUES (%s,%s,%s,%s,%s,%s)
                         """,
                         (
                             row["id"],
                             decision["rubricItemId"],
                             decision["decision"],
-                            "deterministic development stub",
+                            requirement_source[decision["rubricItemId"]],
+                            requirement_confidence.get(decision["rubricItemId"]),
+                            (
+                                "Jev semantic judgment"
+                                if requirement_source[decision["rubricItemId"]] == "jev"
+                                else "deterministic server rule"
+                            ),
                         ),
                     )
         if replay_id is not None:
