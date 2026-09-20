@@ -14,7 +14,7 @@ Date: 2026-09-20. Status: **PASS for repository configuration; production deploy
 - Pages uses `frontend`, `npm ci`, `npm run build`, and `dist` in both Terraform and CI.
 - Worker gateway rejects unsupported paths/methods and oversized bodies, removes client-spoofable identity headers, forwards only to the Container binding, and returns a truthful dependency failure.
 - Container state is durable-object-backed and capped at one instance for the initial cost boundary; paid runtime and production route default to disabled.
-- Environment state and values are separated; no credentials, service-role key, Terraform state, or plan is checked in. The deployment workflow requires GitHub protected environments, validates `SCHEMASPRINT_ENVIRONMENT`/paid gates, and uses Cloudflare Worker secret bindings provisioned by the documented operator step.
+- Environment state and values are separated; no credentials, service-role key, Terraform state, or plan is checked in. The deployment workflow requires GitHub protected environments, validates `ENVIRONMENT`/paid gates, and uses Cloudflare Worker secret bindings provisioned by the documented operator step.
 - Terraform uses Cloudflare provider `~> 5.24`, `fmt`/`validate`, and an encrypted remote-state/lock configuration supplied at init rather than committed.
 - Wrangler dry-run succeeded with `--containers-rollout=none` for all three configs using the repository-root image context; local Docker was unavailable, so image build/rollout was not executed.
 

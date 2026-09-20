@@ -2,23 +2,23 @@ import { Container, getContainer } from "@cloudflare/containers";
 
 interface Env {
   API_CONTAINER: DurableObjectNamespace<SchemaSprintApiContainer>;
-  SCHEMASPRINT_ENVIRONMENT: string;
-  SCHEMASPRINT_PAID_RUNTIME: string;
-  SCHEMASPRINT_DATABASE_DSN?: string;
-  SCHEMASPRINT_SESSION_PEPPER?: string;
-  SCHEMASPRINT_CSRF_KEY?: string;
-  SCHEMASPRINT_ALLOWED_ORIGIN?: string;
-  SCHEMASPRINT_JEV_MODE?: string;
-  SCHEMASPRINT_JEV_BASE_URL?: string;
-  SCHEMASPRINT_JEV_API_KEY?: string;
-  SCHEMASPRINT_JEV_MODEL?: string;
-  SCHEMASPRINT_JEV_TIMEOUT_SECONDS?: string;
-  SCHEMASPRINT_JEV_MAX_RETRIES?: string;
-  SCHEMASPRINT_LLM_MODE?: string;
-  SCHEMASPRINT_GROQ_API_URL?: string;
-  SCHEMASPRINT_GROQ_API_KEY?: string;
-  SCHEMASPRINT_GROQ_MODEL?: string;
-  SCHEMASPRINT_GROQ_TIMEOUT_SECONDS?: string;
+  ENVIRONMENT: string;
+  PAID_RUNTIME: string;
+  DATABASE_DSN?: string;
+  SESSION_PEPPER?: string;
+  CSRF_KEY?: string;
+  ALLOWED_ORIGIN?: string;
+  JEV_MODE?: string;
+  JEV_BASE_URL?: string;
+  JEV_API_KEY?: string;
+  JEV_MODEL?: string;
+  JEV_TIMEOUT_SECONDS?: string;
+  JEV_MAX_RETRIES?: string;
+  LLM_MODE?: string;
+  GROQ_API_URL?: string;
+  GROQ_API_KEY?: string;
+  GROQ_MODEL?: string;
+  GROQ_TIMEOUT_SECONDS?: string;
 }
 
 /**
@@ -61,11 +61,11 @@ const SPOOFABLE_IDENTITY_HEADERS = [
   "x-auth-role",
 ];
 const REQUIRED_RUNTIME_ENV = [
-  "SCHEMASPRINT_ENVIRONMENT",
-  "SCHEMASPRINT_DATABASE_DSN",
-  "SCHEMASPRINT_SESSION_PEPPER",
-  "SCHEMASPRINT_CSRF_KEY",
-  "SCHEMASPRINT_ALLOWED_ORIGIN",
+  "ENVIRONMENT",
+  "DATABASE_DSN",
+  "SESSION_PEPPER",
+  "CSRF_KEY",
+  "ALLOWED_ORIGIN",
 ] as const;
 const UPSTREAM_TIMEOUT_MS = 15_000;
 
@@ -90,22 +90,22 @@ function securityHeaders(response: Response): Response {
 
 function runtimeEnv(env: Env): Record<string, string> | null {
   const raw: Record<string, string | undefined> = {
-    SCHEMASPRINT_ENVIRONMENT: env.SCHEMASPRINT_ENVIRONMENT,
-    SCHEMASPRINT_DATABASE_DSN: env.SCHEMASPRINT_DATABASE_DSN,
-    SCHEMASPRINT_SESSION_PEPPER: env.SCHEMASPRINT_SESSION_PEPPER,
-    SCHEMASPRINT_CSRF_KEY: env.SCHEMASPRINT_CSRF_KEY,
-    SCHEMASPRINT_ALLOWED_ORIGIN: env.SCHEMASPRINT_ALLOWED_ORIGIN,
-    SCHEMASPRINT_JEV_MODE: env.SCHEMASPRINT_JEV_MODE,
-    SCHEMASPRINT_JEV_BASE_URL: env.SCHEMASPRINT_JEV_BASE_URL,
-    SCHEMASPRINT_JEV_API_KEY: env.SCHEMASPRINT_JEV_API_KEY,
-    SCHEMASPRINT_JEV_MODEL: env.SCHEMASPRINT_JEV_MODEL,
-    SCHEMASPRINT_JEV_TIMEOUT_SECONDS: env.SCHEMASPRINT_JEV_TIMEOUT_SECONDS,
-    SCHEMASPRINT_JEV_MAX_RETRIES: env.SCHEMASPRINT_JEV_MAX_RETRIES,
-    SCHEMASPRINT_LLM_MODE: env.SCHEMASPRINT_LLM_MODE,
-    SCHEMASPRINT_GROQ_API_URL: env.SCHEMASPRINT_GROQ_API_URL,
-    SCHEMASPRINT_GROQ_API_KEY: env.SCHEMASPRINT_GROQ_API_KEY,
-    SCHEMASPRINT_GROQ_MODEL: env.SCHEMASPRINT_GROQ_MODEL,
-    SCHEMASPRINT_GROQ_TIMEOUT_SECONDS: env.SCHEMASPRINT_GROQ_TIMEOUT_SECONDS,
+    ENVIRONMENT: env.ENVIRONMENT,
+    DATABASE_DSN: env.DATABASE_DSN,
+    SESSION_PEPPER: env.SESSION_PEPPER,
+    CSRF_KEY: env.CSRF_KEY,
+    ALLOWED_ORIGIN: env.ALLOWED_ORIGIN,
+    JEV_MODE: env.JEV_MODE,
+    JEV_BASE_URL: env.JEV_BASE_URL,
+    JEV_API_KEY: env.JEV_API_KEY,
+    JEV_MODEL: env.JEV_MODEL,
+    JEV_TIMEOUT_SECONDS: env.JEV_TIMEOUT_SECONDS,
+    JEV_MAX_RETRIES: env.JEV_MAX_RETRIES,
+    LLM_MODE: env.LLM_MODE,
+    GROQ_API_URL: env.GROQ_API_URL,
+    GROQ_API_KEY: env.GROQ_API_KEY,
+    GROQ_MODEL: env.GROQ_MODEL,
+    GROQ_TIMEOUT_SECONDS: env.GROQ_TIMEOUT_SECONDS,
   };
   if (REQUIRED_RUNTIME_ENV.some((name) => !raw[name])) {
     return null;
@@ -130,7 +130,7 @@ export default {
       return json({ code: "NOT_FOUND" }, 404);
     }
 
-    if (env.SCHEMASPRINT_PAID_RUNTIME !== "true") {
+    if (env.PAID_RUNTIME !== "true") {
       return json({ code: "PAID_RUNTIME_DISABLED" }, 503);
     }
 
@@ -165,7 +165,7 @@ export default {
       const containerEnv = runtimeEnv(env);
       if (containerEnv === null) {
         console.error("schemasprint_gateway_runtime_not_configured", {
-          environment: env.SCHEMASPRINT_ENVIRONMENT,
+          environment: env.ENVIRONMENT,
         });
         return json({ code: "GATEWAY_NOT_CONFIGURED" }, 503);
       }
@@ -178,7 +178,7 @@ export default {
       } catch (error) {
         if (controller.signal.aborted) {
           console.error("schemasprint_gateway_upstream_timeout", {
-            environment: env.SCHEMASPRINT_ENVIRONMENT,
+            environment: env.ENVIRONMENT,
           });
           return json({ code: "UPSTREAM_TIMEOUT" }, 504);
         }
@@ -188,7 +188,7 @@ export default {
       }
     } catch (error) {
       console.error("schemasprint_gateway_container_unavailable", {
-        environment: env.SCHEMASPRINT_ENVIRONMENT,
+        environment: env.ENVIRONMENT,
         errorType: error instanceof Error ? error.name : "unknown",
       });
       return json({ code: "DEPENDENCY_UNAVAILABLE" }, 503);

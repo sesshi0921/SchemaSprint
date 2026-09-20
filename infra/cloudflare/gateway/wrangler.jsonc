@@ -9,8 +9,8 @@
     "head_sampling_rate": 0.1
   },
   "vars": {
-    "SCHEMASPRINT_ENVIRONMENT": "development",
-    "SCHEMASPRINT_PAID_RUNTIME": "false"
+    "ENVIRONMENT": "development",
+    "PAID_RUNTIME": "false"
   },
   "containers": [
     {

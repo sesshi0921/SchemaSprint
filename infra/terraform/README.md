@@ -52,7 +52,7 @@ artifact: dist
 
 The manual, reviewed `.github/workflows/deploy.yml` uploads that `frontend/dist` artifact to the Terraform-created Pages project. `VITE_API_BASE_URL` is baked into the build from the Terraform `api_base_url` contract (or `/api` for same-origin routing); the workflow refuses an unconfigured value. It deploys the Worker/container only when the operator explicitly selects `deploy_container=true` in a protected GitHub environment and the environment's `ENABLE_PAID_RUNTIME=true` gate agrees. Wrangler configs and the container Dockerfile are under `infra/cloudflare/gateway`; `image_build_context=../../..` makes the Docker context the repository root so the checked-in backend/rust package is included.
 
-Configure these non-secret variables in each protected GitHub environment and keep them aligned with the Terraform plan: `SCHEMASPRINT_ENVIRONMENT` (`staging` or `production`), `ENABLE_PAID_RUNTIME` (`true` only after approval), `PAGES_PROJECT_NAME`, `VITE_API_BASE_URL` (`/api` or the exact HTTPS gateway base), `SMOKE_WEB_URL`, and (for container deploy/rollback) `SMOKE_API_URL`. The checked-in Wrangler `SCHEMASPRINT_PAID_RUNTIME` marker is the second, reviewable gate: leave it `false` (and Terraform `enable_paid_runtime=false`) for the MVP; only an approved paid-runtime change may set all three gates to `true`.
+Configure these non-secret variables in each protected GitHub environment and keep them aligned with the Terraform plan: `ENVIRONMENT` (`staging` or `production`), `ENABLE_PAID_RUNTIME` (`true` only after approval), `PAGES_PROJECT_NAME`, `VITE_API_BASE_URL` (`/api` or the exact HTTPS gateway base), `SMOKE_WEB_URL`, and (for container deploy/rollback) `SMOKE_API_URL`. The checked-in Wrangler `PAID_RUNTIME` marker is the second, reviewable gate: leave it `false` (and Terraform `enable_paid_runtime=false`) for the MVP; only an approved paid-runtime change may set all three gates to `true`.
 
 A container deployment can activate the Worker before image push/rollout completes. After every authorized deploy, check Worker status, container rollout/logs, `/healthz`, and a representative authenticated API request. On failure, stop promotion, retain the prior Worker/container version, and roll forward or restore the last known-good immutable artifact; do not destroy the database.
 
@@ -60,24 +60,24 @@ A container deployment can activate the Worker before image push/rollout complet
 
 Provision these exact names as Cloudflare Worker secrets through the protected deployment workflow before a real container deployment (the values are never Terraform variables or Pages bindings):
 
-- `SCHEMASPRINT_DATABASE_DSN`;
-- `SCHEMASPRINT_SESSION_PEPPER`;
-- `SCHEMASPRINT_CSRF_KEY`;
-- `SCHEMASPRINT_ALLOWED_ORIGIN`;
-- optional `SCHEMASPRINT_JEV_MODE`, `SCHEMASPRINT_JEV_BASE_URL`, and `SCHEMASPRINT_JEV_API_KEY` when external Jev is approved.
-- optional `SCHEMASPRINT_JEV_MODEL`, `SCHEMASPRINT_JEV_TIMEOUT_SECONDS`, and `SCHEMASPRINT_JEV_MAX_RETRIES` when external Jev is approved;
-- optional `SCHEMASPRINT_LLM_MODE`, `SCHEMASPRINT_GROQ_API_URL`, `SCHEMASPRINT_GROQ_API_KEY`, `SCHEMASPRINT_GROQ_MODEL`, and `SCHEMASPRINT_GROQ_TIMEOUT_SECONDS` when Groq feedback generation is approved. The Groq key is server-only.
+- `DATABASE_DSN`;
+- `SESSION_PEPPER`;
+- `CSRF_KEY`;
+- `ALLOWED_ORIGIN`;
+- optional `JEV_MODE`, `JEV_BASE_URL`, and `JEV_API_KEY` when external Jev is approved.
+- optional `JEV_MODEL`, `JEV_TIMEOUT_SECONDS`, and `JEV_MAX_RETRIES` when external Jev is approved;
+- optional `LLM_MODE`, `GROQ_API_URL`, `GROQ_API_KEY`, `GROQ_MODEL`, and `GROQ_TIMEOUT_SECONDS` when Groq feedback generation is approved. The Groq key is server-only.
 
-`SCHEMASPRINT_ENVIRONMENT` is a non-secret Wrangler variable and must match the selected protected environment. The Worker passes only these bindings to the private container at startup. Never print them, place them in tfvars, or expose them to the frontend; the database DSN is the only Supabase/PostgreSQL connection material the backend needs.
+`ENVIRONMENT` is a non-secret Wrangler variable and must match the selected protected environment. The Worker passes only these bindings to the private container at startup. Never print them, place them in tfvars, or expose them to the frontend; the database DSN is the only Supabase/PostgreSQL connection material the backend needs.
 
 Before selecting `deploy_container=true`, provision the bindings from a protected operator shell (the GitHub workflow intentionally does not echo or transport secret values):
 
 ```sh
 config="infra/cloudflare/gateway/wrangler.production.jsonc"
-printf '%s' "$SCHEMASPRINT_DATABASE_DSN" | infra/cloudflare/gateway/node_modules/.bin/wrangler secret put SCHEMASPRINT_DATABASE_DSN --config "$config"
-printf '%s' "$SCHEMASPRINT_SESSION_PEPPER" | infra/cloudflare/gateway/node_modules/.bin/wrangler secret put SCHEMASPRINT_SESSION_PEPPER --config "$config"
-printf '%s' "$SCHEMASPRINT_CSRF_KEY" | infra/cloudflare/gateway/node_modules/.bin/wrangler secret put SCHEMASPRINT_CSRF_KEY --config "$config"
-printf '%s' "$SCHEMASPRINT_ALLOWED_ORIGIN" | infra/cloudflare/gateway/node_modules/.bin/wrangler secret put SCHEMASPRINT_ALLOWED_ORIGIN --config "$config"
+printf '%s' "$DATABASE_DSN" | infra/cloudflare/gateway/node_modules/.bin/wrangler secret put DATABASE_DSN --config "$config"
+printf '%s' "$SESSION_PEPPER" | infra/cloudflare/gateway/node_modules/.bin/wrangler secret put SESSION_PEPPER --config "$config"
+printf '%s' "$CSRF_KEY" | infra/cloudflare/gateway/node_modules/.bin/wrangler secret put CSRF_KEY --config "$config"
+printf '%s' "$ALLOWED_ORIGIN" | infra/cloudflare/gateway/node_modules/.bin/wrangler secret put ALLOWED_ORIGIN --config "$config"
 ```
 
 Use the staging config for staging, and keep the shell variables in an approved secret manager. The workflow validates that the protected environment has corresponding secret entries before rollout but cannot prove Cloudflare secret storage without performing a live provider call.

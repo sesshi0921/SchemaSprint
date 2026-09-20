@@ -49,20 +49,20 @@ jobs:
       - name: Validate environment, API base, and paid/container gates
         env:
           EXPECTED_ENVIRONMENT: ${{ inputs.environment }}
-          SCHEMASPRINT_ENVIRONMENT: ${{ vars.SCHEMASPRINT_ENVIRONMENT }}
+          ENVIRONMENT: ${{ vars.ENVIRONMENT }}
           ENABLE_PAID_RUNTIME: ${{ vars.ENABLE_PAID_RUNTIME }}
           VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
           PAGES_PROJECT_NAME: ${{ vars.PAGES_PROJECT_NAME }}
           SMOKE_WEB_URL: ${{ vars.SMOKE_WEB_URL }}
           SMOKE_API_URL: ${{ vars.SMOKE_API_URL }}
           DEPLOY_CONTAINER: ${{ inputs.deploy_container }}
-          SCHEMASPRINT_DATABASE_DSN: ${{ secrets.SCHEMASPRINT_DATABASE_DSN }}
-          SCHEMASPRINT_SESSION_PEPPER: ${{ secrets.SCHEMASPRINT_SESSION_PEPPER }}
-          SCHEMASPRINT_CSRF_KEY: ${{ secrets.SCHEMASPRINT_CSRF_KEY }}
-          SCHEMASPRINT_ALLOWED_ORIGIN: ${{ secrets.SCHEMASPRINT_ALLOWED_ORIGIN }}
+          DATABASE_DSN: ${{ secrets.DATABASE_DSN }}
+          SESSION_PEPPER: ${{ secrets.SESSION_PEPPER }}
+          CSRF_KEY: ${{ secrets.CSRF_KEY }}
+          ALLOWED_ORIGIN: ${{ secrets.ALLOWED_ORIGIN }}
         run: |
           set -euo pipefail
-          test "$SCHEMASPRINT_ENVIRONMENT" = "$EXPECTED_ENVIRONMENT"
+          test "$ENVIRONMENT" = "$EXPECTED_ENVIRONMENT"
           test -n "$PAGES_PROJECT_NAME"
           test -n "$VITE_API_BASE_URL"
           case "$VITE_API_BASE_URL" in
@@ -73,14 +73,14 @@ jobs:
           if [ "$DEPLOY_CONTAINER" = "true" ]; then
             test "$ENABLE_PAID_RUNTIME" = "true"
             test -n "$SMOKE_API_URL"
-            test -n "$SCHEMASPRINT_DATABASE_DSN"
-            test -n "$SCHEMASPRINT_SESSION_PEPPER"
-            test -n "$SCHEMASPRINT_CSRF_KEY"
-            test -n "$SCHEMASPRINT_ALLOWED_ORIGIN"
+            test -n "$DATABASE_DSN"
+            test -n "$SESSION_PEPPER"
+            test -n "$CSRF_KEY"
+            test -n "$ALLOWED_ORIGIN"
           fi
           config="infra/cloudflare/gateway/wrangler.${EXPECTED_ENVIRONMENT}.jsonc"
-          grep -Fq "\"SCHEMASPRINT_ENVIRONMENT\": \"$SCHEMASPRINT_ENVIRONMENT\"" "$config"
-          paid_marker=$(grep -F '"SCHEMASPRINT_PAID_RUNTIME"' "$config" | sed -E 's/.*"SCHEMASPRINT_PAID_RUNTIME": "([^"]+)".*/\1/')
+          grep -Fq "\"ENVIRONMENT\": \"$ENVIRONMENT\"" "$config"
+          paid_marker=$(grep -F '"PAID_RUNTIME"' "$config" | sed -E 's/.*"PAID_RUNTIME": "([^"]+)".*/\1/')
           if [ "$DEPLOY_CONTAINER" = "true" ]; then
             test "$paid_marker" = "true"
           else

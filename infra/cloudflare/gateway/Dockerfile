@@ -40,7 +40,7 @@ WORKDIR /app
 RUN useradd --create-home --uid 10001 appuser
 
 # Provider credentials, JWT keys, database DSNs, and other runtime secrets are
-# never copied into the image.  The Worker injects SCHEMASPRINT_* bindings when
+# never copied into the image.  The Worker injects unprefixed bindings when
 # it starts this private container.
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/backend /app/backend

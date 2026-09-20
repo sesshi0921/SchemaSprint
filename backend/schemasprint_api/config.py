@@ -36,7 +36,7 @@ MAX_REQUEST_BODY_BYTES = 1024 * 1024
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="SCHEMASPRINT_",
+        env_prefix="",
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
@@ -129,16 +129,20 @@ class Settings(BaseSettings):
         ):
             raise ValueError("Groq mode requires an API key")
         if self.jev_mode is JevMode.EXTERNAL and (
-            self.jev_base_url is None or self.jev_api_key is None
+            self.jev_base_url is None
+            or self.jev_api_key is None
+            or not self.jev_api_key.get_secret_value().strip()
         ):
             raise ValueError("external Jev requires URL and API key")
         if (
             self.jev_mode is JevMode.EXTERNAL
-            and self.environment in {Environment.STAGING, Environment.PRODUCTION}
+            and self.environment
+            in {Environment.DEVELOPMENT, Environment.STAGING, Environment.PRODUCTION}
+            and self.jev_api_key is not None
             and self.jev_base_url is not None
             and self.jev_base_url.scheme.lower() != "https"
         ):
-            raise ValueError("external Jev URL must use HTTPS outside development")
+            raise ValueError("external Jev URL must use HTTPS when a key is configured")
         if (
             self.groq_api_key is not None
             and self.environment in {Environment.STAGING, Environment.PRODUCTION}
