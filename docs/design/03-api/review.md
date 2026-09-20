@@ -1,6 +1,6 @@
 # API gate review
 
-Date: 2026-09-20. Status: **PASS for contract design**. Handler/provider implementation and production authorization remain later gates.
+Date: 2026-09-20. Status: **PARTIAL — contract and local handlers verified; provider/integration gates remain**.
 
 ## Scope and checks
 
@@ -36,4 +36,4 @@ Results: specification `OK`; static checks passed; 7 API-contract tests passed. 
 - Worker/Python implementations must generate typed clients/server models from or validate against this contract; drift is CI-failing.
 - Reward ads, billing and external vendor webhooks remain disabled; adding them requires a new reviewed contract and release gate.
 
-Gate decision: proceed to browser-cache design. The API contract is design-complete, not implemented.
+Gate decision: the API contract and local handler boundary are implemented and tested. Production provider integration and authenticated browser verification remain explicit release gates.
