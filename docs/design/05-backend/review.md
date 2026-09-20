@@ -18,26 +18,26 @@ Status: **NOT PASSED**
   not recompute the score on reads.
 - Jev modes without an implemented adapter resolve durably as `failed` with
   `JEV_UNAVAILABLE`; the development stub is deterministic and local-only.
+- OAuth/provider-unavailable behavior, onboarding, profile/export/deletion,
+  feedback/translation/community/report/job reads, and owner/admin content,
+  publication, moderation, approvals, entitlements, and batch-job routes are
+  implemented with CSRF, idempotency, MFA/re-authentication, role checks and
+  audit writes where required.
 - RLS tests cover owner isolation, future publication/notice visibility,
   private feedback translation isolation, immutable assessment records, and
   premium-expiry draft behavior. Static checks: Ruff and mypy pass for the
   learner implementation and focused tests.
 
-## Required operations still unimplemented
+## Remaining release gates
 
-The root OpenAPI contract has 43 operations. This phase does **not** claim
-implementation of the following groups:
+- A production Jev adapter and Groq/NMT provider adapters, provider
+  timeout/retry workers, and the full asynchronous assessment/feedback
+  execution lifecycle remain unconnected.
+- Real Supabase OAuth/JWT/RLS/MFA integration, authenticated browser E2E,
+  provider contract tests, and production backup/restore evidence remain
+  release gates.
 
-- OAuth start/callback/logout, onboarding age/policy acknowledgement, account
-  export/deletion and re-authentication proof.
-- Feedback generation/read, reward attempts, translation reads/jobs, generic
-  job polling, community posts/reports, and all moderator/admin content,
-  validation, publication, moderation, approval, and entitlement routes.
-- A production Jev adapter, provider timeout/retry worker, and asynchronous
-  assessment job lifecycle.
-
-These are missing implementation, not simulated success. The phase therefore
-cannot pass the backend gate or be released as an MVP. The authorized database
-policy must allow owners to read/export existing drafts after premium expiry,
-while INSERT/UPDATE/DELETE remain premium-gated; this distinction must be
-verified by the DB suite.
+These are explicit provider/integration gates, not simulated success. The
+authorized database policy allows owners to read/export existing drafts after
+premium expiry, while INSERT/UPDATE/DELETE remain premium-gated; this is
+covered by the DB suite.
