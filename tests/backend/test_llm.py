@@ -28,7 +28,7 @@ def make_settings(**overrides: Any) -> Settings:
         "allowed_origin": "https://schemasprint.test",
     }
     values.update(overrides)
-    return Settings(_env_file=None, **values)
+    return Settings(_env_file=None, **values)  # type: ignore[call-arg]
 
 
 @pytest.mark.asyncio
