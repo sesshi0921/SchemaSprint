@@ -65,6 +65,8 @@ Provision these exact names as Cloudflare Worker secrets through the protected d
 - `SCHEMASPRINT_CSRF_KEY`;
 - `SCHEMASPRINT_ALLOWED_ORIGIN`;
 - optional `SCHEMASPRINT_JEV_MODE`, `SCHEMASPRINT_JEV_BASE_URL`, and `SCHEMASPRINT_JEV_API_KEY` when external Jev is approved.
+- optional `SCHEMASPRINT_JEV_MODEL`, `SCHEMASPRINT_JEV_TIMEOUT_SECONDS`, and `SCHEMASPRINT_JEV_MAX_RETRIES` when external Jev is approved;
+- optional `SCHEMASPRINT_LLM_MODE`, `SCHEMASPRINT_GROQ_API_URL`, `SCHEMASPRINT_GROQ_API_KEY`, `SCHEMASPRINT_GROQ_MODEL`, and `SCHEMASPRINT_GROQ_TIMEOUT_SECONDS` when Groq feedback generation is approved. The Groq key is server-only.
 
 `SCHEMASPRINT_ENVIRONMENT` is a non-secret Wrangler variable and must match the selected protected environment. The Worker passes only these bindings to the private container at startup. Never print them, place them in tfvars, or expose them to the frontend; the database DSN is the only Supabase/PostgreSQL connection material the backend needs.
 
