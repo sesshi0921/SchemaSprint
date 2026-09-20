@@ -87,6 +87,53 @@ class ChatCompletion:
     provider_request_id: str | None
 
 
+class LocalStubClient:
+    """Development/test-only deterministic provider; never suitable for release."""
+
+    model = "local-llm-stub-v1"
+
+    @property
+    def configured(self) -> bool:
+        return True
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+    async def aclose(self) -> None:
+        return None
+
+    async def complete(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        max_output_tokens: int = 1024,
+    ) -> ChatCompletion:
+        if not messages or len(messages) > 32:
+            raise ValueError("messages must contain between 1 and 32 items")
+        if any(not message.content.strip() for message in messages):
+            raise ValueError("LLM messages cannot be empty")
+        if not 1 <= max_output_tokens <= MAX_OUTPUT_TOKENS:
+            raise ValueError("LLM output token limit is invalid")
+        return ChatCompletion(
+            '{"contentEn":"Development stub feedback; configure a real '
+            'provider before release.","mentionedRequirementIds":[]}',
+            self.model,
+            None,
+        )
+
+
+def client_from_settings(
+    settings: Settings, *, http_client: httpx.AsyncClient | None = None
+) -> GroqClient | LocalStubClient:
+    """Select a clearly labelled local stub or the server-side Groq adapter."""
+    if settings.llm_mode is LLMMode.STUB:
+        return LocalStubClient()
+    return GroqClient.from_settings(settings, http_client=http_client)
+
+
 class GroqClient:
     """Minimal, bounded, injectable async Groq adapter.
 

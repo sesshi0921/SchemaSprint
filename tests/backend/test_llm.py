@@ -14,6 +14,8 @@ from schemasprint_api.llm import (
     LLMTimeoutError,
     LLMUnavailableError,
     LLMUpstreamError,
+    LocalStubClient,
+    client_from_settings,
 )
 
 
@@ -26,7 +28,7 @@ def make_settings(**overrides: Any) -> Settings:
         "allowed_origin": "https://schemasprint.test",
     }
     values.update(overrides)
-    return Settings(**values)
+    return Settings(_env_file=None, **values)
 
 
 @pytest.mark.asyncio
@@ -180,3 +182,14 @@ def test_groq_mode_requires_key_and_stub_is_non_production() -> None:
         make_settings(llm_mode=LLMMode.GROQ)
     with pytest.raises(ValueError, match="development and test"):
         make_settings(environment=Environment.PRODUCTION, llm_mode=LLMMode.STUB)
+
+
+@pytest.mark.asyncio
+async def test_development_stub_is_explicit_and_does_not_make_http_calls() -> None:
+    client = client_from_settings(
+        make_settings(llm_mode=LLMMode.STUB),
+    )
+    assert isinstance(client, LocalStubClient)
+    result = await client.complete([ChatMessage("user", "schema")])
+    assert result.model == "local-llm-stub-v1"
+    assert "configure a real provider" in result.content
