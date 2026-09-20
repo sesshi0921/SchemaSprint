@@ -32,6 +32,8 @@ jobs:
       - run: npm run lint
       - run: npm run test -- --run
       - run: npm run build
+      - run: npx playwright install --with-deps chromium-headless-shell
+      - run: npm run test:e2e
 
   gateway:
     name: Worker gateway typecheck

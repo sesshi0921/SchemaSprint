@@ -44,6 +44,8 @@ npm run lint
 npm test -- --run
 npm exec tsc -- --noEmit
 npm run build
+npx playwright install chromium-headless-shell
+npm run test:e2e
 
 # Cloudflare Worker configuration (no deployment)
 cd infra/cloudflare/gateway
