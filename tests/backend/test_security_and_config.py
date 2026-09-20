@@ -17,7 +17,7 @@ def settings(database_uri: str, **overrides: Any) -> Settings:
         "allowed_origin": "https://schemasprint.test",
     }
     values.update(overrides)
-    return Settings(**values)
+    return Settings(_env_file=None, **values)  # type: ignore[call-arg]
 
 
 def test_secret_derived_tokens_are_deterministic_and_separated() -> None:
