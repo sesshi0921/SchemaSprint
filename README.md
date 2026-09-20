@@ -50,6 +50,7 @@ npm run build
 
 - Jevは既定で`unavailable`のため、キー未設定時は採点を実行せず`JEV_UNAVAILABLE`を返します。ローカルのstubはテスト専用です。接続先は`https://api.typesafe.ai`を既定値とし、環境変数で差し替えられます。
 - Groqは問題文・フィードバック生成用の任意のサーバー側プロバイダーです。`LLM_MODE=unavailable`（既定）または空の`GROQ_API_KEY`では`GROQ_UNAVAILABLE`として生成せず、キーはブラウザへ公開しません。`LLM_MODE=groq`とAPI URL、モデル、タイムアウトは`infra/local/.env.example`を参照してください。429/5xxは再試行可能な明示的エラーとして上位のジョブ処理に渡します。
+- フィードバックは提出済み結果の画面からのみ要求できます。ローカル`LLM_MODE=stub`では検証済みの開発用フィードバックを保存し、初回要求後の再生成はPremiumまたは広告報酬が必要です（MVPでは広告を無効化）。`LLM_MODE=groq`はデータ処理ポリシーを確認した専用ワーカーを別途配備するまで`pending`ジョブとして保持し、未接続なのに成功表示しません。
 - Google/GitHub OAuth、Cloudflare Worker/R2、Supabase Auth/PostgreSQL、メール通知、広告、決済は本番のシークレット登録とE2E検証が必要です。
 - `docs/design/*/review.md` の未完了ゲート（実BFF/OAuth E2E、アクセシビリティ・モバイル実機、バックアップ・復旧、負荷・ペネトレーション、運用予算監視）を通過するまで本番公開しません。
 - 本リポジトリの環境ではDocker実行と本番デプロイを行っていません。
