@@ -416,10 +416,19 @@ def register_learner_routes(
         idempotency_key: UUID = Header(alias="Idempotency-Key"),
     ) -> Response:
         require_csrf(request, principal, settings.csrf_key.get_secret_value())
-        # Feedback is an LLM operation, independent from Jev assessment. Do
-        # not enqueue a job until a real server-side provider is configured;
-        # a pending job without a worker would be a false success.
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "LLM_UNAVAILABLE")
+
+        async def action() -> tuple[int, object]:
+            job = await repository.request_feedback(principal, submissionId)
+            return status.HTTP_202_ACCEPTED, job
+
+        return await _idempotent(
+            database,
+            principal,
+            f"request-feedback:{submissionId}",
+            idempotency_key,
+            {"submissionId": submissionId},
+            action,
+        )
 
     @router.post("/feedback-rewards", response_model=dict, status_code=201)
     async def start_feedback_reward(

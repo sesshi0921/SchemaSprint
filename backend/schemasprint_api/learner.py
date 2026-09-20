@@ -25,7 +25,7 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .config import JevMode, Settings
+from .config import JevMode, LLMMode, Settings
 from .core import (
     Assessment,
     CoreValidationError,
@@ -33,7 +33,9 @@ from .core import (
     validate_canonical_schema,
 )
 from .database import Database
+from .feedback import FeedbackOutputError, parse_feedback_output
 from .jev import JevClient, JevError
+from .llm import ChatMessage, LocalStubClient
 from .problems import Locale, ProblemDetail
 from .security import Principal
 
@@ -1670,6 +1672,132 @@ class LearnerRepository:
                 )
             )
         return result
+
+    async def request_feedback(
+        self, principal: Principal, submission_id: str
+    ) -> JobModel:
+        """Create feedback safely without claiming an unavailable worker.
+
+        The development stub is executed locally and its JSON is still passed
+        through the same strict envelope validator used by a future worker.
+        External providers are intentionally queued as ``pending`` until a
+        separately deployed worker with an explicit data-processing policy is
+        available; submission data is never sent from this request path.
+        """
+        async with self.database.as_user(principal) as connection:
+            row = await (
+                await connection.execute(
+                    """
+                    SELECT s.id::text, s.rubric_snapshot, sr.submission_id
+                    FROM public.submissions s
+                    LEFT JOIN public.submission_results sr ON sr.submission_id=s.id
+                    WHERE s.id=%s AND s.user_id=public.current_user_id()
+                    """,
+                    (submission_id,),
+                )
+            ).fetchone()
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "SUBMISSION_NOT_FOUND")
+        if row["submission_id"] is None:
+            raise HTTPException(status.HTTP_409_CONFLICT, "SUBMISSION_NOT_ASSESSED")
+
+        job_id = str(__import__("ulid").new())
+        provider = self.settings.llm_mode.value
+        async with self.database.privileged() as connection:
+            await connection.execute(
+                """
+                INSERT INTO private.jobs(id, owner_user_id, kind, payload)
+                VALUES (%s,%s,'feedback_generation',%s::jsonb)
+                """,
+                (
+                    job_id,
+                    principal.user_id,
+                    json.dumps(
+                        {"submissionId": submission_id, "provider": provider},
+                        separators=(",", ":"),
+                    ),
+                ),
+            )
+
+        if self.settings.llm_mode is not LLMMode.STUB:
+            if self.settings.llm_mode is LLMMode.GROQ:
+                return JobModel(id=job_id, kind="feedback_generation", state="pending")
+            failure_code = "LLM_UNAVAILABLE"
+            async with self.database.privileged() as connection:
+                await connection.execute(
+                    "UPDATE private.jobs SET state='failed', last_error_code=%s WHERE id=%s",
+                    (failure_code, job_id),
+                )
+            return JobModel(
+                id=job_id,
+                kind="feedback_generation",
+                state="failed",
+                failureCode=failure_code,
+            )
+
+        rubric = row["rubric_snapshot"]
+        allowed_ids = {
+            str(item["id"])
+            for item in rubric
+            if isinstance(item, Mapping) and "id" in item
+        }
+        try:
+            async with LocalStubClient() as client:
+                completion = await client.complete(
+                    [ChatMessage("user", "Generate development feedback JSON.")]
+                )
+            generated = parse_feedback_output(
+                completion.content, allowed_requirement_ids=allowed_ids
+            )
+            async with self.database.privileged() as connection:
+                await connection.execute(
+                    "SELECT id FROM public.submissions WHERE id=%s FOR UPDATE",
+                    (submission_id,),
+                )
+                version_row = await (
+                    await connection.execute(
+                        """
+                        SELECT coalesce(max(version), 0) + 1 AS next_version
+                        FROM public.feedback_versions WHERE submission_id=%s
+                        """,
+                        (submission_id,),
+                    )
+                ).fetchone()
+                if version_row is None:
+                    raise RuntimeError("feedback version query returned no row")
+                await connection.execute(
+                    """
+                    INSERT INTO public.feedback_versions
+                      (id, submission_id, user_id, version, content_en, model_version)
+                    VALUES (%s,%s,%s,%s,%s,%s)
+                    """,
+                    (
+                        str(__import__("ulid").new()),
+                        submission_id,
+                        principal.user_id,
+                        int(version_row["next_version"]),
+                        generated.contentEn,
+                        completion.model,
+                    ),
+                )
+                await connection.execute(
+                    "UPDATE private.jobs SET state='succeeded', last_error_code=NULL WHERE id=%s",
+                    (job_id,),
+                )
+            return JobModel(id=job_id, kind="feedback_generation", state="succeeded")
+        except (FeedbackOutputError, ValueError):
+            failure_code = "LLM_INVALID_OUTPUT"
+            async with self.database.privileged() as connection:
+                await connection.execute(
+                    "UPDATE private.jobs SET state='failed', last_error_code=%s WHERE id=%s",
+                    (failure_code, job_id),
+                )
+            return JobModel(
+                id=job_id,
+                kind="feedback_generation",
+                state="failed",
+                failureCode=failure_code,
+            )
 
     async def get_job(self, principal: Principal, job_id: str) -> JobModel | None:
         async with self.database.privileged() as connection:
