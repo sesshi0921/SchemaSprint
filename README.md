@@ -44,7 +44,18 @@ npm run lint
 npm test -- --run
 npm exec tsc -- --noEmit
 npm run build
+
+# Cloudflare Worker configuration (no deployment)
+cd infra/cloudflare/gateway
+npm ci
+npm run typecheck
+npx wrangler deploy --config wrangler.staging.jsonc --dry-run --containers-rollout=none
 ```
+
+The Worker dry-run validates the staging bindings without uploading a Worker or
+building/deploying the Container. A real Container rollout additionally needs
+Docker-compatible tooling, Cloudflare authentication, and the protected
+environment secrets described in `infra/terraform/README.md`.
 
 ## 外部サービスと本番前提
 
