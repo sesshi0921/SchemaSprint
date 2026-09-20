@@ -49,6 +49,7 @@ npm run build
 ## 外部サービスと本番前提
 
 - Jevは外部URL・認証情報・API仕様を設定していないため、既定では採点を実行せず`JEV_UNAVAILABLE`を返します。ローカルのstubはテスト専用です。
+- Groqは問題文・フィードバック生成用の任意のサーバー側プロバイダーです。`SCHEMASPRINT_LLM_MODE=unavailable`（既定）または空の`SCHEMASPRINT_GROQ_API_KEY`では`GROQ_UNAVAILABLE`として生成せず、キーはブラウザへ公開しません。`SCHEMASPRINT_LLM_MODE=groq`とAPI URL、モデル、タイムアウトは`infra/local/.env.example`を参照してください。429/5xxは再試行可能な明示的エラーとして上位のジョブ処理に渡します。
 - Google/GitHub OAuth、Cloudflare Worker/R2、Supabase Auth/PostgreSQL、メール通知、広告、決済は本番のシークレット登録とE2E検証が必要です。
 - `docs/design/*/review.md` の未完了ゲート（実BFF/OAuth E2E、アクセシビリティ・モバイル実機、バックアップ・復旧、負荷・ペネトレーション、運用予算監視）を通過するまで本番公開しません。
 - 本リポジトリの環境ではDocker実行と本番デプロイを行っていません。

@@ -20,6 +20,14 @@ class JevMode(StrEnum):
     EXTERNAL = "external"
 
 
+class LLMMode(StrEnum):
+    """Generation provider selection; assessment remains independently Jev-owned."""
+
+    UNAVAILABLE = "unavailable"
+    STUB = "stub"
+    GROQ = "groq"
+
+
 # The edge, Python service, and Rust FFI deliberately share one reversible
 # request/payload ceiling.  Smaller per-field limits remain useful for
 # validation, but no layer may accept a larger aggregate payload.
@@ -42,6 +50,17 @@ class Settings(BaseSettings):
     jev_mode: JevMode = JevMode.UNAVAILABLE
     jev_base_url: AnyHttpUrl | None = None
     jev_api_key: SecretStr | None = None
+    llm_mode: LLMMode = LLMMode.UNAVAILABLE
+    jev_model: str = "jev-latest"
+    jev_timeout_seconds: float = 10.0
+    jev_max_retries: int = 2
+    # LLM generation is deliberately independent from Jev assessment.  A
+    # missing key leaves this provider unavailable; it must never be replaced
+    # with a fabricated response.
+    groq_api_url: AnyHttpUrl = AnyHttpUrl("https://api.groq.com/openai/v1")
+    groq_api_key: SecretStr | None = None
+    groq_model: str = "openai/gpt-oss-20b"
+    groq_timeout_seconds: float = 20.0
     billing_enabled: Literal[False] = False
     rewarded_ads_enabled: Literal[False] = False
     database_pool_min: int = 1
@@ -68,6 +87,16 @@ class Settings(BaseSettings):
             raise ValueError("rate limit window is invalid")
         if not 1 <= self.rate_limit_max_keys <= 1_000_000:
             raise ValueError("rate limit key bound is invalid")
+        if not 0 < self.jev_timeout_seconds <= 30:
+            raise ValueError("Jev timeout must be between 0 and 30 seconds")
+        if not 0 <= self.jev_max_retries <= 3:
+            raise ValueError("Jev retries must be between 0 and 3")
+        if not 1 <= self.groq_timeout_seconds <= 120:
+            raise ValueError("Groq timeout is invalid")
+        if not 1 <= len(self.groq_model) <= 128:
+            raise ValueError("Groq model is invalid")
+        if any(char.isspace() for char in self.groq_model):
+            raise ValueError("Groq model cannot contain whitespace")
         for network in self.trusted_proxy_cidrs:
             try:
                 ip_network(network, strict=False)
@@ -87,6 +116,16 @@ class Settings(BaseSettings):
             Environment.TEST,
         }:
             raise ValueError("Jev stub is restricted to development and test")
+        if self.llm_mode is LLMMode.STUB and self.environment not in {
+            Environment.DEVELOPMENT,
+            Environment.TEST,
+        }:
+            raise ValueError("LLM stub is restricted to development and test")
+        if self.llm_mode is LLMMode.GROQ and (
+            self.groq_api_key is None
+            or not self.groq_api_key.get_secret_value().strip()
+        ):
+            raise ValueError("Groq mode requires an API key")
         if self.jev_mode is JevMode.EXTERNAL and (
             self.jev_base_url is None or self.jev_api_key is None
         ):
@@ -98,6 +137,12 @@ class Settings(BaseSettings):
             and self.jev_base_url.scheme.lower() != "https"
         ):
             raise ValueError("external Jev URL must use HTTPS outside development")
+        if (
+            self.groq_api_key is not None
+            and self.environment in {Environment.STAGING, Environment.PRODUCTION}
+            and self.groq_api_url.scheme.lower() != "https"
+        ):
+            raise ValueError("Groq URL must use HTTPS outside development")
         return self
 
 
